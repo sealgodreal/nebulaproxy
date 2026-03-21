@@ -216,3 +216,9 @@ app.use((req,res)=>{
     res.status(404).send("Bad request");
   }
 });
+
+const PORT = 3000;
+
+app.listen(PORT, () => {
+  console.log(`server runnin on port 3000`);
+});
