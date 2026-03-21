@@ -1,148 +1,218 @@
 const express = require("express");
 const fetch = require("node-fetch");
 const { URL } = require("url");
+const http = require("http");
 const https = require("https");
+const { CookieJar } = require("tough-cookie");
 
 const app = express();
 
-const agent = new https.Agent({ rejectUnauthorized: false });
+const httpAgent = new http.Agent();
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
-function getHeaders(base) {
-  return {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
-    "Accept":
-      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "sec-ch-ua":
-      '"Chromium";v="122", "Google Chrome";v="122", "Not:A-Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "Referer": base.origin,
-    "Origin": base.origin,
-    "Host": base.host
-  };
+const PREFIX = "/nebula/proxy?url=";
+const cookieJarMap = new Map();
+
+function proxify(url, origin) {
+  return PREFIX +
+    encodeURIComponent(url) +
+    "&origin=" + encodeURIComponent(origin || url);
 }
 
 app.get("/nebula/proxy", async (req, res) => {
-  const targetUrl = req.query.url || Object.keys(req.query)[0];
-  if (!targetUrl) return res.status(400).send("Missing ?url=");
+  let target = req.query.url;
+  if (!target) return res.status(400).send("Missing url");
+
+  const origin = req.query.origin || target;
 
   try {
-    const base = new URL(targetUrl);
+    let jar = cookieJarMap.get(origin);
+    if (!jar) {
+      jar = new CookieJar();
+      cookieJarMap.set(origin, jar);
+    }
 
-    const response = await fetch(targetUrl, {
-      method: "GET",
-      agent,
+    const cookies = await jar.getCookieString(target);
+
+    const response = await fetch(target, {
+      agent: target.startsWith("https") ? httpsAgent : httpAgent,
       redirect: "manual",
-      headers: getHeaders(base)
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": origin,
+        "Origin": origin,
+        "Cookie": cookies
+      }
     });
 
+    const setCookie = response.headers.raw()["set-cookie"];
+    if (setCookie) setCookie.forEach(c => jar.setCookieSync(c, target));
+
     if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
-      if (location) {
-        const newUrl = new URL(location, base).href;
-        return res.redirect(
-          "/nebula/proxy?url=" + encodeURIComponent(newUrl)
-        );
+      const loc = response.headers.get("location");
+      if (loc) {
+        const newUrl = new URL(loc, target).href;
+        return res.redirect(proxify(newUrl, origin));
       }
     }
 
-    const contentType = response.headers.get("content-type") || "";
+    const type = response.headers.get("content-type") || "";
     res.status(response.status);
+    res.setHeader("Access-Control-Allow-Origin", "*");
 
-    res.removeHeader("content-security-policy");
-    res.removeHeader("x-frame-options");
-
-    if (contentType.includes("text/html")) {
+    if (type.includes("text/html")) {
       let body = await response.text();
 
       body = body.replace(
         /<head>/i,
-        `<head><base href="${base.origin}/">`
+        `<head><script>
+window.__ORIGIN__="${origin}";
+window.__BASE__="${target}";
+</script>`
       );
 
-      body = body.replace(/(href|src|action)="(.*?)"/gi, (match, attr, link) => {
-        try {
-          const newUrl = new URL(link, base).href;
-          return `${attr}="/nebula/proxy?url=${encodeURIComponent(newUrl)}"`;
-        } catch {
-          return match;
-        }
+      body = body.replace(/(href|src|action)=["']([^"']+)["']/gi, (m,a,u)=>{
+        try{
+          const abs = new URL(u, target).href;
+          return a+'="'+proxify(abs, origin)+'"';
+        }catch{return m;}
       });
 
-      body = body.replace(/url\((.*?)\)/gi, (match, url) => {
-        try {
-          const clean = url.replace(/['"]/g, "");
-          const newUrl = new URL(clean, base).href;
-          return `url("/nebula/proxy?url=${encodeURIComponent(newUrl)}")`;
-        } catch {
-          return match;
-        }
+      body = body.replace(/url\\((.*?)\\)/gi,(m,u)=>{
+        try{
+          const clean=u.replace(/['"]/g,"");
+          const abs=new URL(clean,target).href;
+          return 'url("'+proxify(abs,origin)+'")';
+        }catch{return m;}
       });
 
-      body = body.replace(/fetch\((.*?)\)/g, (match, url) => {
-        return `fetch("/nebula/proxy?url=" + encodeURIComponent(${url}))`;
-      });
-
-      body = body.replace(
-        /<\/body>/i,
-        `
+      body = body.replace(/<\/body>/i,`
 <script>
 (function(){
-function proxifyUrl(url){
-  try{return"/nebula/proxy?url="+encodeURIComponent(new URL(url,location.href).href)}
-  catch{return url}
-}
-const oldFetch=window.fetch;
-window.fetch=function(url,...args){
-  return oldFetch(proxifyUrl(url),...args)
-}
-const oldOpen=XMLHttpRequest.prototype.open;
-XMLHttpRequest.prototype.open=function(m,u,...r){
-  return oldOpen.call(this,m,proxifyUrl(u),...r)
-}
-const oldImage=window.Image;
-window.Image=function(w,h){
-  const i=new oldImage(w,h);
-  const d=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,"src");
-  Object.defineProperty(i,"src",{
-    set(v){d.set.call(this,proxifyUrl(v))},
-    get(){return d.get.call(this)}
-  });
-  return i;
-}
-const origAppend=Element.prototype.appendChild;
-Element.prototype.appendChild=function(el){
-  if(el.tagName==="SCRIPT"||el.tagName==="LINK"||el.tagName==="IMG"){
-    if(el.src)el.src=proxifyUrl(el.src);
-    if(el.href)el.href=proxifyUrl(el.href);
-  }
-  return origAppend.call(this,el)
-}
-})();
-</script>
-</body>`
-      );
+const ORIGIN = window.__ORIGIN__;
+let BASE = window.__BASE__;
 
-      res.send(body);
-    } else {
-      const buffer = await response.buffer();
-      res.set("Content-Type", contentType);
-      res.send(buffer);
-    }
-  } catch (err) {
-    res.status(500).send("Proxy error: " + err.message);
+function proxifyUrl(url){
+  try{
+    const abs = new URL(url, BASE).href;
+    BASE = abs;
+    return "/nebula/proxy?url="+encodeURIComponent(abs)+"&origin="+encodeURIComponent(ORIGIN);
+  }catch{return url;}
+}
+
+function load(url){
+  let frame = document.querySelector("#nebula-frame");
+  if(!frame){
+    frame = document.createElement("iframe");
+    frame.id = "nebula-frame";
+    frame.style.position="absolute";
+    frame.style.top="0";
+    frame.style.left="0";
+    frame.style.width="100%";
+    frame.style.height="100%";
+    frame.style.border="none";
+    document.body.appendChild(frame);
+  }
+  frame.src = proxifyUrl(url);
+}
+
+document.addEventListener("click", e=>{
+  const a = e.target.closest("a");
+  if(a && a.href){
+    e.preventDefault();
+    load(a.href);
   }
 });
 
-app.listen(3000, () =>
-  console.log("Proxy running at http://localhost:3000")
-);
+document.addEventListener("submit", e=>{
+  e.preventDefault();
+  const f = e.target;
+  const data = new FormData(f);
+  const q = new URLSearchParams(data).toString();
+  load(f.action + (q?"?"+q:""));
+});
+
+const oldFetch = fetch;
+fetch = (u,...a)=>oldFetch(proxifyUrl(u),...a);
+const oldOpen = XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open=function(m,u,...r){ return oldOpen.call(this,m,proxifyUrl(u),...r); };
+
+const push = history.pushState;
+history.pushState=function(s,t,u){ if(u) load(u); return push.apply(this,arguments); };
+
+function hookFunctions(){
+  if(window.launch){
+    const orig = window.launch;
+    window.launch = function(url,...args){ return orig(proxifyUrl(url),...args); };
+  }
+}
+setInterval(hookFunctions,500);
+
+function fixInline(el){
+  try{
+    for(const attr of el.attributes||[]){
+      if(attr.name.startsWith("on")){
+        attr.value = attr.value.replace(/(['"])(\\/[^'"]+)['"]/g,(m,q,u)=>'"'+proxifyUrl(u)+'"');
+      }
+    }
+  }catch{}
+}
+
+function fix(el){
+  try{
+    if(el.href) el.href = proxifyUrl(el.href);
+    if(el.src) el.src = proxifyUrl(el.src);
+    if(el.action) el.action = proxifyUrl(el.action);
+    fixInline(el);
+  }catch{}
+}
+
+document.querySelectorAll("*").forEach(fix);
+
+new MutationObserver(muts=>{
+  muts.forEach(m=>{
+    m.addedNodes.forEach(n=>{
+      if(n.nodeType===1){
+        fix(n);
+        n.querySelectorAll && n.querySelectorAll("*").forEach(fix);
+      }
+    });
+  });
+}).observe(document,{childList:true,subtree:true});
+
+})();
+</script>
+</body>`);
+
+      res.send(body);
+
+    } else {
+      res.setHeader("Content-Type", type);
+      response.body.pipe(res);
+    }
+
+  } catch (e) {
+    res.status(500).send("Proxy error: "+e.message);
+  }
+});
+
+app.use((req,res)=>{
+  if(req.path.startsWith("/nebula/proxy"))
+    return res.status(404).send("Not found");
+
+  try{
+    let origin;
+    if(req.headers.referer){
+      const ref = new URL(req.headers.referer);
+      origin = new URLSearchParams(ref.search).get("origin") || ref.origin;
+    } else {
+      origin = req.protocol + "://" + req.get("host");
+    }
+
+    const target = new URL(req.originalUrl, origin).href;
+    return res.redirect("/nebula/proxy?url="+encodeURIComponent(target)+"&origin="+encodeURIComponent(origin));
+
+  }catch{
+    res.status(404).send("Bad request");
+  }
+});
