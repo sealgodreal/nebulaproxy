@@ -20,7 +20,219 @@ function proxify(url, origin) {
 }
 
 app.get("/", (req, res) => {
-  res.status(200).end();
+  res.status(200).send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Nebula Proxy | Dead End</title>
+
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+
+<style>
+* { margin: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #000;
+  --surface: rgba(20,20,20,0.75);
+  --border: #222;
+  --text: #fff;
+  --text-muted: #888;
+  --hover: #1e1e1e;
+}
+
+body {
+  background: black;
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.wrapper {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.container {
+  backdrop-filter: blur(12px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 32px;
+  width: 90%;
+  max-width: 600px;
+  text-align: center;
+  box-shadow: 0 0 60px rgba(0,0,0,0.7);
+}
+
+h1 {
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+
+p {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin: 10px 0;
+  line-height: 1.5;
+}
+
+.proxy-box {
+  background: #0a0a0a;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  margin: 15px 0;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.copy-btn {
+  margin-top: 8px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--hover);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  transition: 0.15s;
+}
+
+.copy-btn:hover {
+  background: #2a2a2a;
+}
+
+.links {
+  margin-top: 20px;
+}
+
+.link-btn {
+  display: block;
+  border: 1px solid var(--border);
+  padding: 11px;
+  margin: 6px 0;
+  border-radius: 10px;
+  color: var(--text);
+  text-decoration: none;
+  transition: 0.15s;
+}
+
+.link-btn:hover {
+  background: var(--hover);
+  transform: translateY(-1px);
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="bg"></canvas>
+
+<div class="wrapper">
+  <div class="container">
+    <h1>Nebula Proxy</h1>
+
+    <p>You've reached a dead end! This endpoint exists for uptime monitoring.</p>
+
+    <p>To use the proxy, append a URL to:</p>
+
+    <div class="proxy-box" id="proxyUrl">
+      https://nebulaproxy-j7xn.onrender.com/nebula/proxy?url=
+    </div>
+
+    <button class="copy-btn" onclick="copyProxy()">Copy URL</button>
+
+    <p>Or head over to <strong>Nebula Browser</strong>:</p>
+
+    <div class="links">
+      <a class="link-btn" href="https://nebulaunblocking.vercel.app" target="_blank">https://nebulaunblocking.vercel.app</a>
+    </div>
+  </div>
+</div>
+
+<script>
+function copyProxy() {
+  const text = document.getElementById("proxyUrl").innerText;
+  navigator.clipboard.writeText(text);
+}
+
+const canvas = document.getElementById("bg");
+const ctx = canvas.getContext("2d");
+
+let particles = [];
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.onresize = resize;
+resize();
+
+for (let i = 0; i < 60; i++) {
+  particles.push({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    vx: (Math.random() - 0.5) * 0.3,
+    vy: (Math.random() - 0.5) * 0.3
+  });
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      let dx = particles[i].x - particles[j].x;
+      let dy = particles[i].y - particles[j].y;
+      let dist = Math.sqrt(dx*dx + dy*dy);
+
+      if (dist < 120) {
+        ctx.strokeStyle = "rgba(255,255,255," + (1 - dist/120) * 0.15 + ")";
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.stroke();
+      }
+    }
+  }
+
+  particles.forEach(p => {
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    p.x += p.vx;
+    p.y += p.vy;
+
+    if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
+    if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
+  });
+
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
+
+</body>
+</html>
+  `);
 });
 
 app.get("/nebula/proxy", async (req, res) => {
