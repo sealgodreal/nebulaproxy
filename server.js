@@ -19,8 +19,8 @@ function proxify(url, origin) {
     "&origin=" + encodeURIComponent(origin || url);
 }
 
-app.get("/health", (req, res) => {
-  res.status(200).send("ok");
+app.head("/", (req, res) => {
+  res.status(200).end();
 });
 
 app.get("/nebula/proxy", async (req, res) => {
