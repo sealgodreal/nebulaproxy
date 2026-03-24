@@ -147,7 +147,7 @@ p {
   <div class="container">
     <h1>Nebula Proxy</h1>
 
-    <p>You've reached a dead end! This endpoint exists for uptime monitoring.</p>
+    <p>You've reached a dead end! This endpoint exists to keep the proxy alive.</p>
 
     <p>To use the proxy, append a URL to:</p>
 
