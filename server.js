@@ -19,7 +19,7 @@ function proxify(url, origin) {
     "&origin=" + encodeURIComponent(origin || url);
 }
 
-app.head("/nebula/anti-sleep", (req, res) => {
+app.head("/nebula/health", (req, res) => {
   res.status(200).end();
 });
 
