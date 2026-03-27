@@ -58,6 +58,7 @@ app.get("/nebula/proxy", async (req, res) => {
         "Cookie": cookies,
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "identity",
         ...(req.headers.range ? { Range: req.headers.range } : {})
       }
     });
