@@ -52,16 +52,25 @@ app.get("/nebula/proxy", async (req, res) => {
       agent: target.startsWith("https") ? httpsAgent : httpAgent,
       redirect: "manual",
       headers: {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": req.headers["user-agent"] || 
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": req.headers["accept"] || "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
         "Referer": origin,
         "Origin": origin,
         "Cookie": cookies,
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "identity",
         ...(req.headers.range ? { Range: req.headers.range } : {})
       }
     });
+    
 
     const setCookie = response.headers.raw()["set-cookie"];
     if (setCookie) setCookie.forEach(c => jar.setCookieSync(c, target));
