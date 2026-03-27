@@ -59,6 +59,8 @@ app.get("/nebula/proxy", async (req, res) => {
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "identity",
+        "X-Forwarded-For": req.headers["x-forwarded-for"] || req.socket.remoteAddress,
+        "X-Real-IP": req.socket.remoteAddress,
         ...(req.headers.range ? { Range: req.headers.range } : {})
       }
     });
