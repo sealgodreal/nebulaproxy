@@ -278,7 +278,7 @@ app.use((req,res)=>{
     const target = new URL(req.originalUrl, origin).href;
 
     if (target.includes("/nebula/proxy")) {
-      return res.status(400).send("Loop prevented");
+      return res.status(400).send("uhh something went wrong idk");
     }
 
     return res.redirect("/nebula/proxy?url="+encodeURIComponent(target)+"&origin="+encodeURIComponent(origin));
