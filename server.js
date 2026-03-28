@@ -20,12 +20,12 @@ const wsProxy = createProxyServer({
   ws: true
 });
 
-const PREFIX = "/nebula/proxy?url=";
+const PREFIX = "/lessons/math?url=";
 const cookieJarMap = new Map();
 
 function proxify(url, origin) {
   try {
-    if (!url || url.includes("/nebula/proxy")) return url;
+    if (!url || url.includes("/lessons/math")) return url;
     const abs = new URL(url, origin).href;
     return PREFIX + encodeURIComponent(abs) + "&origin=" + encodeURIComponent(origin);
   } catch {
@@ -33,7 +33,7 @@ function proxify(url, origin) {
   }
 }
 
-app.get("/nebula/proxy", async (req, res) => {
+app.get("/lessons/math", async (req, res) => {
   let target = req.query.url;
   if (!target) return res.status(400).send("Missing url");
 
@@ -123,10 +123,10 @@ let BASE = window.__BASE__;
 
 function proxifyUrl(url){
   try{
-    if (!url || url.includes("/nebula/proxy")) return url;
+    if (!url || url.includes("/lessons/math")) return url;
     const abs = new URL(url, BASE).href;
     BASE = abs;
-    return "/nebula/proxy?url=" +
+    return "/lessons/math?url=" +
       encodeURIComponent(abs) +
       "&origin=" + encodeURIComponent(ORIGIN);
   }catch{
@@ -148,7 +148,7 @@ function fixInline(el){
                 url.startsWith("data:")
               ) return match;
               const abs = new URL(url, BASE).href;
-              if (abs.includes("/nebula/proxy")) return match;
+              if (abs.includes("/lessons/math")) return match;
               return quote + proxifyUrl(abs) + quote;
             } catch {
               return match;
@@ -232,7 +232,7 @@ window.WebSocket = function(url, protocols){
 
 const push = history.pushState;
 history.pushState = function(s,t,u){
-  if(u && !u.includes("/nebula/proxy")){
+  if(u && !u.includes("/lessons/math")){
     location.href = proxifyUrl(u);
   }
   return push.apply(this, arguments);
@@ -263,7 +263,7 @@ const server = app.listen(3000, () => {
 
 server.on("upgrade", (req, socket, head) => {
   try {
-    const url = new URL(req.url, "https://nebulaproxy-j7xn.onrender.com");
+    const url = new URL(req.url, "https://k3v9q1x8b4m2f7z6r0.onrender.com");
     const target = url.searchParams.get("url");
     if (target) {
       wsProxy.ws(req, socket, head, { target });
@@ -276,18 +276,18 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 app.use((req,res)=>{
-  if(req.path.startsWith("/nebula/proxy"))
+  if(req.path.startsWith("/lessons/math"))
     return res.status(404).send("Not found");
 
   try{
     const origin = req.protocol + "://" + req.get("host");
     const target = new URL(req.originalUrl, origin).href;
 
-    if (target.includes("/nebula/proxy")) {
+    if (target.includes("/lessons/math")) {
       return res.status(400).send("uhh something went wrong idk");
     }
 
-    return res.redirect("/nebula/proxy?url="+encodeURIComponent(target)+"&origin="+encodeURIComponent(origin));
+    return res.redirect("/lessons/math?url="+encodeURIComponent(target)+"&origin="+encodeURIComponent(origin));
 
   }catch{
     res.status(404).send("Bad request");
