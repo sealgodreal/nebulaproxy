@@ -15,7 +15,7 @@ const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: false 
 const wsProxy = createProxyServer({ changeOrigin: true, secure: false, ws: true });
 
 const PREFIX = "/lessons/math";
-const PROXY = "https://k3v9q1x8b4m2f7z6r0.onrender.com"; // http://localhost:3000 - for testin
+const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000 - for testin
 const cookieJarMap = new Map();
 
 function encode(url) { return encodeURIComponent(url); }
