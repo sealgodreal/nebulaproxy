@@ -1,4 +1,5 @@
 // ts code so beautiful twin
+// note - i finally fixed one of the main issues (its still not done tho)
 const express = require("express");
 const fetch = require("node-fetch");
 const { URL } = require("url");
@@ -73,6 +74,14 @@ function rewriteHtmlAttrs(body, base) {
     return `srcset=${q}${rewritten}${q}`;
   });
 
+  body = body.replace(/(launch)\s*=\s*(['"])([^'"]+)\2/gi, (m, attr, q, u) => {
+    return `${attr}=${q}${proxify(u, base)}${q}`;
+  });
+
+  body = body.replace(/(\bon\w+)\s*=\s*(['"])([^'"]+)\2/gi, (m, attr, q, u) => {
+    return `${attr}=${q}${u.replace(/(https?:\/\/[^\s"'<>]+)/gi, (_, aq, url) => proxify(url, base))}${q}`;
+  });
+
   return body;
 }
 
@@ -103,13 +112,23 @@ function clientScript(origin, base) {
 
   function proxify(url) {
     try {
-      if (!url || url.startsWith("data:") || url.startsWith("blob:") ||
-          url.startsWith("javascript:") || url.startsWith("#")) return url;
-      if (url.includes("/lessons/math")) return url;
+      if (
+        !url ||
+        url.startsWith("data:") ||
+        url.startsWith("blob:") ||
+        url.startsWith("javascript:") ||
+        url.startsWith("#") ||
+        url.includes("/lessons/math?url=")
+      ) return url;
+
       const base = BASE || window.location.href;
       const abs = new URL(url, base).href;
-      return "/lessons/math?url=" + encodeURIComponent(abs) + "&origin=" + encodeURIComponent(ORIGIN);
-    } catch { return url; }
+
+      return "/lessons/math?url=" + encodeURIComponent(abs) +
+             "&origin=" + encodeURIComponent(ORIGIN);
+    } catch {
+      return url;
+    }
   }
 
   function proxifyWs(url) {
@@ -121,7 +140,7 @@ function clientScript(origin, base) {
   }
 
   let _baseUrl;
-  try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://example.com"); }
+  try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://example.com"); } // yes, example.com
 
   const _realOrigin   = _baseUrl.origin;
   const _realHost     = _baseUrl.host;
@@ -160,33 +179,54 @@ function clientScript(origin, base) {
   try { Object.defineProperty(document, 'domain', { get() { return _realHostname; }, configurable: true }); } catch(e) {}
 
   function fixEl(el) {
+    if (el.dataset.proxified) return;
+    el.dataset.proxified = "1";
     try {
+      if (!el || el.nodeType !== 1) return;
       if (el.tagName === "SCRIPT") return;
-      if (el.href && !el.href.includes("/lessons/math")) el.href = proxify(el.href);
-      if (el.src && !el.src.includes("/lessons/math")) el.src = proxify(el.src);
-      if (el.action && !el.action.includes("/lessons/math")) el.action = proxify(el.action);
-      if (el.style && el.style.cssText) {
-        el.style.cssText = el.style.cssText.replace(new RegExp('url\\(([\'"]?)([^\'"()]+)\\1\\)', 'g'), (m,q,u) => {
-          return "url(" + q + proxify(u) + q + ")";
-        });
+
+      for (const attr of el.attributes) {
+        const name = attr.name.toLowerCase();
+        let value = attr.value;
+        if (!value) continue;
+
+        if (["href", "src", "action", "launch"].includes(name)) {
+          if (!value.includes("/lessons/math?url=")) {
+            el.setAttribute(attr.name, proxify(value));
+          }
+        } else if (/^on/.test(name)) {
+          const rewritten = value.replace(/(https?:\\/\\/[^\\s"'<>]+)/g, proxify);
+          if (rewritten !== value) el.setAttribute(attr.name, rewritten);
+        }
+      }
+
+      if (el.hasAttribute("style")) {
+        const css = el.getAttribute("style");
+        const rewritten = css.replace(/url\\((['"]?)([^'")]+)\\1\\)/gi, (_, q, u) => "url(" + q + proxify(u) + q + ")");
+        if (rewritten !== css) el.setAttribute("style", rewritten);
       }
     } catch {}
   }
 
-  document.querySelectorAll("*").forEach(fixEl);
-  new MutationObserver(muts => {
-    muts.forEach(m => m.addedNodes.forEach(n => {
-      if (n.nodeType === 1) { fixEl(n); n.querySelectorAll && n.querySelectorAll("*").forEach(fixEl); }
-    }));
-  }).observe(document, { childList: true, subtree: true });
+  window.addEventListener("load", () => {
+    document.querySelectorAll("*").forEach(fixEl);
 
-  const _fetch = window.fetch;
-  window.fetch = function(url, ...args) {
+    new MutationObserver(muts => {
+      muts.forEach(m => m.addedNodes.forEach(n => {
+        if (n.nodeType === 1) {
+          fixEl(n);
+          n.querySelectorAll && n.querySelectorAll("*").forEach(fixEl);
+        }
+      }));
+    }).observe(document, { childList: true, subtree: true });
+  });
+
+  const origFetch = window.fetch;
+  window.fetch = async function(url, ...args) {
     try {
-      if (typeof url === 'string') url = proxify(url);
-      else if (url && url.url) url = new Request(proxify(url.url), url);
+      url = typeof url === 'string' ? proxify(url) : new Request(proxify(url.url), url);
     } catch {}
-    return _fetch(url, ...args);
+    return origFetch(url, ...args);
   };
 
   const _open = XMLHttpRequest.prototype.open;
@@ -219,7 +259,11 @@ function clientScript(origin, base) {
 
   document.addEventListener("click", e => {
     const a = e.target.closest("a[href]");
-    if (a) { e.preventDefault(); location.href = proxify(a.href); }
+    if (!a) return;
+    const raw = a.getAttribute("href");
+    if (!raw || raw.startsWith("/lessons/math")) return;
+    e.preventDefault();
+    location.href = proxify(raw);
   }, true);
 
   document.addEventListener("submit", e => {
@@ -287,10 +331,6 @@ app.get(PREFIX, async (req, res) => {
 
     if (contentType.includes("text/html")) {
       let body = await response.text();
-
-      body = rewriteHtmlAttrs(body, target);
-      body = rewriteInlineStyles(body, target);
-      body = rewriteStyleBlocks(body, target);
 
       const script = clientScript(origin, target);
       if (/<\/head>/i.test(body)) body = body.replace(/<\/head>/i, `${script}</head>`);
