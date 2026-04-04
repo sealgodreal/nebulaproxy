@@ -324,8 +324,10 @@ app.get(PREFIX, async (req, res) => {
       const v = response.headers.get(h);
       if (v) res.setHeader(h, v);
     });
+
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Service-Worker-Allowed", "/");
     res.removeHeader("content-security-policy");
     res.removeHeader("x-frame-options");
 
