@@ -11,7 +11,7 @@ const { createProxyServer } = require("http-proxy");
 const app = express();
 
 const httpAgent = new http.Agent({ keepAlive: true });
-const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true }); // rejectUnauthorized: false - originally
+const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true });
 
 const wsProxy = createProxyServer({ changeOrigin: true, secure: false, ws: true });
 
