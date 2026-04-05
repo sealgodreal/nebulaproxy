@@ -19,6 +19,19 @@ const PREFIX = "/lessons/math";
 const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000 - for testin
 const cookieJarMap = new Map();
 
+const blockedKeywords = [
+  "test",
+];
+
+function isBlocked(url) {
+  try {
+    const lower = url.toLowerCase();
+    return BLOCKED_KEYWORDS.some(k => lower.includes(k));
+  } catch {
+    return false;
+  }
+}
+
 function encode(url) { return encodeURIComponent(url); }
 
 function proxify(url, base) {
@@ -26,6 +39,7 @@ function proxify(url, base) {
     if (!url || url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("javascript:") || url.startsWith("#")) return url;
     if (url.includes(PREFIX)) return url;
     const abs = new URL(url, base).href;
+    if (isBlocked(abs)) { return `/assets/link-restricted.html?link=${encode(abs)}`; }
     return `${PREFIX}?url=${encode(abs)}&origin=${encode(base)}`;
   } catch {
     return url;
