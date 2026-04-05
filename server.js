@@ -26,7 +26,7 @@ const blockedKeywords = [
 function isBlocked(url) {
   try {
     const lower = url.toLowerCase();
-    return BLOCKED_KEYWORDS.some(k => lower.includes(k));
+    return blockedKeywords.some(k => lower.includes(k));
   } catch {
     return false;
   }
