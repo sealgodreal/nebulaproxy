@@ -19,12 +19,13 @@ const PREFIX = "/lessons/math";
 const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000 - for testin
 const cookieJarMap = new Map();
 
-const blockedKeywords = [ // im sorry breh but i cant get the proxy shutdown
+const blockedKeywords = [ // (kinda) stopping the gooners
   "gore",
   "porn",
   "sex",
   "xxx",
   "xvideos",
+  "rule34"
 ];
 
 function isBlocked(url) {
