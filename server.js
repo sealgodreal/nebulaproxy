@@ -18,20 +18,19 @@ const PREFIX = "/lessons/math";
 const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000 - for testin
 const cookieJarMap = new Map();
 
-const blockedKeywords = [ // (kinda) stopping the gooners and the proxy from shuttin down
-  "gore",
-  "porn",
-  "sex",
-  "xxx",
-  "xvideos",
-  "rule34",
-  "r34",
-];
+const blockedKeywords = [ "porn", "gore", ];
+const blockedLinks = [ "pornhub.com", "brazzers.com",  "rule34.xxx", "xvideos.com", ];
 
 function isBlocked(url) {
   try {
-    const lower = url.toLowerCase();
-    return blockedKeywords.some(k => lower.includes(k));
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    const origin = parsed.origin.toLowerCase();
+
+    if (blockedLinks.some(link => hostname === link.toLowerCase())) { return true; }
+    if (blockedKeywords.some(k => hostname.includes(k))) { return true; }
+
+    return false;
   } catch {
     return false;
   }
