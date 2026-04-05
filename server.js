@@ -295,6 +295,8 @@ app.get(PREFIX, async (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).send("Missing url");
 
+  if (isBlocked(target)) { return res.redirect(`/assets/link-restricted.html?link=${encode(target)}`); }
+
   const origin = req.query.origin || target;
 
   try {
