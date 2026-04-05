@@ -1,5 +1,4 @@
 // ts code so beautiful twin
-// note - i finally fixed one of the main issues (its still not done tho)
 const express = require("express");
 const fetch = require("node-fetch");
 const { URL } = require("url");
