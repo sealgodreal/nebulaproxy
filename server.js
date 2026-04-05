@@ -377,7 +377,10 @@ app.get(PREFIX, async (req, res) => {
   }
 });
 
+app.use("/assets", express.static(require("path").join(__dirname, "assets")));
+
 app.use((req, res) => {
+  if (req.path.startsWith("/assets")) { return res.status(404).send("Not found"); }
   if (req.path.startsWith(PREFIX)) return res.status(404).send("Not found");
 
   const referer = req.headers.referer || "";
