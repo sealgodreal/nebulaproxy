@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #050505; color: #fff;
+  font-family: 'Geist', system-ui, sans-serif;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  min-height: 100vh; text-align: center; overflow: hidden;
+}
+#bg { position: fixed; inset: 0; z-index: 0; opacity: 0.35; }
+.content {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 40px 20px;
+  animation: fadeUp 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.wordmark { font-size: 2.4rem; font-weight: 500; letter-spacing: -0.03em; color: #fff; line-height: 1; margin-bottom: 20px; }
+.wordmark span { color: rgba(255,255,255,0.2); font-weight: 300; }
+.icon-ring {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: #0e0808; border: 1px solid #2a1010;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 24px; box-shadow: 0 0 40px rgba(180,40,40,0.08);
+}
+.error-code { font-size: 10px; font-weight: 400; letter-spacing: 0.14em; color: #6b2020; margin-bottom: 14px; text-transform: uppercase; }
+.title { font-size: 1.4rem; font-weight: 500; letter-spacing: -0.025em; color: #fff; margin-bottom: 10px; }
+.subtitle { font-size: 13px; font-weight: 300; color: #383838; letter-spacing: -0.01em; line-height: 1.65; max-width: fit-content; margin-bottom: 0px; }
+.subtitle-the-second { font-size: 13px; font-weight: 300; color: #383838; letter-spacing: -0.01em; line-height: 1.65; max-width: fit-content; margin-bottom: 20px; }
+.url-box {
+  background: #0a0a0a; border: 1px solid #181818; border-radius: 12px;
+  padding: 10px 20px; display: flex; align-items: center; gap: 8px;
+  margin-bottom: 32px; min-width: 260px;
+}
+.url-lock { color: #6b2020; flex-shrink: 0; }
+.url-text { font-size: 12px; color: #2e2e2e; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.url-text .url-highlight { color: #444; }
+.back-btn {
+  background: #0e0e0e; border: 1px solid #1e1e1e; color: #444;
+  font-size: 12px; font-family: 'Geist', sans-serif; font-weight: 400;
+  padding: 10px 22px; border-radius: 10px; cursor: pointer;
+  letter-spacing: 0.01em; transition: background 0.15s, border-color 0.15s, color 0.15s;
+  text-decoration: none; display: inline-block;
+}
+.back-btn:hover { background: #161616; border-color: #2e2e2e; color: #aaa; }
+
+.corner-gif { position: fixed; top: 10px; left: 10px; width: 60px; height: auto; z-index: 2; pointer-events: none; border-radius: 8px; }
+</style>
+</head>
+<body>
+<img class="corner-gif" src="https://raw.githubusercontent.com/sealgodreal/nebulabrowser/refs/heads/main/assets/CatEatingChips.gif" alt="">
+<canvas id="bg"></canvas>
+<div class="content">
+  <div class="wordmark">nebula<span>.</span></div>
+  <div class="icon-ring">
+    <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+      <rect x="4" y="13" width="22" height="14" rx="3.5" stroke="#8b2020" stroke-width="1.4"/>
+      <path d="M9.5 13V10a5.5 5.5 0 0 1 11 0v3" stroke="#8b2020" stroke-width="1.4" stroke-linecap="round"/>
+      <circle cx="15" cy="19.5" r="1.8" fill="#8b2020"/>
+      <line x1="15" y1="21.3" x2="15" y2="23.5" stroke="#8b2020" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>
+  </div>
+  <div class="error-code">proxy block</div>
+  <div class="title">That search has been blocked by the proxy.</div>
+
+  <div class="subtitle">Reason: Blocked Keyword</div>
+  <div class="subtitle-the-second">Explanation: We suspect that the link opened contains media that can get Nebula Proxy shut down, therefore it has been blocked.</div>
+
+  <div class="url-box">
+    <svg class="url-lock" width="13" height="13" viewBox="0 0 13 13" fill="none">
+      <rect x="1.5" y="5.5" width="10" height="6.5" rx="1.5" stroke="#8b2020" stroke-width="1.2"/>
+      <path d="M4 5.5V4a2.5 2.5 0 0 1 5 0v1.5" stroke="#8b2020" stroke-width="1.2" stroke-linecap="round"/>
+    </svg>
+    <div class="url-text">
+      <span class="url-highlight" id="blocked-url">no link</span>
+    </div>
+  </div>
+  <a class="back-btn" href="https://sealgodreal.github.io/nebulabrowser/assets/homepage.html">Return Home</a>
+</div>
+<script>
+(function(){
+  const params = new URLSearchParams(window.location.search);
+  const link = params.get('link');
+  if (link) {
+    document.getElementById('blocked-url').textContent = link;
+  }
+})();
+
+const canvas = document.getElementById('bg');
+const ctx = canvas.getContext('2d');
+const colors = [[80,82,88],[140,140,148],[200,200,205],[55,58,65],[110,115,125]];
+const numlines = 70, numparticles = 80;
+function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+window.addEventListener('resize', resize); resize();
+const particles = Array.from({length: numparticles}, () => {
+  const ci = Math.floor(Math.random() * colors.length);
+  return { x: Math.random()*canvas.width, y: Math.random()*canvas.height, r: Math.random()*1.4+0.3, speed: Math.random()*0.25+0.05, angle: Math.random()*Math.PI*2, alpha: Math.random()*0.5+0.15, color: colors[ci], twinkle: Math.random()*Math.PI*2, twinkleSpeed: Math.random()*0.04+0.01 };
+});
+const STARS = Array.from({length:120}, () => ({ x: Math.random()*canvas.width, y: Math.random()*canvas.height, r: Math.random()*0.8+0.2, alpha: Math.random()*0.6+0.1, twinkle: Math.random()*Math.PI*2 }));
+let t = 0;
+function waveY(x, i, time) {
+  const base = (i/numlines)*canvas.height;
+  const freq1=0.003+i*0.00004, freq2=0.007+i*0.00003;
+  const amp1=35+Math.sin(i*0.28)*22, amp2=18+Math.cos(i*0.45)*12;
+  const warp=Math.sin(x*0.0018+time*0.35+i*0.09)*45;
+  return base+Math.sin(x*freq1+time*0.6+i*0.2)*amp1+Math.sin(x*freq2-time*0.45+i*0.28)*amp2+warp;
+}
+function lineColor(i, time) {
+  const tc=(i/numlines+time*0.015)%1;
+  const seg=tc*colors.length, i0=Math.floor(seg)%colors.length, i1=(i0+1)%colors.length, f=seg-Math.floor(seg);
+  const c0=colors[i0], c1=colors[i1];
+  return [c0[0]+(c1[0]-c0[0])*f, c0[1]+(c1[1]-c0[1])*f, c0[2]+(c1[2]-c0[2])*f];
+}
+function getLineAlpha(i, time) {
+  const pulse=Math.sin(time*1.1+i*0.14)*0.5+0.5;
+  return (0.04+pulse*0.18)*(1-Math.abs(i/numlines-0.5)*0.8);
+}
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const W=canvas.width, H=canvas.height;
+  for(let i=0;i<numlines;i++){
+    ctx.beginPath();
+    for(let x=0;x<=W;x+=2){ const y=waveY(x,i,t); x===0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
+    const [r,g,b]=lineColor(i,t);
+    ctx.strokeStyle=`rgba(${r|0},${g|0},${b|0},${getLineAlpha(i,t).toFixed(3)})`;
+    ctx.lineWidth=0.6; ctx.stroke();
+  }
+  for(const s of STARS){
+    const a=Math.sin(t*1.5+s.twinkle)*0.3+0.7;
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+    ctx.fillStyle=`rgba(220,220,255,${(s.alpha*a).toFixed(3)})`; ctx.fill();
+  }
+  for(const p of particles){
+    p.x+=Math.cos(p.angle)*p.speed; p.y+=Math.sin(p.angle)*p.speed;
+    p.angle+=(Math.random()-0.5)*0.04; p.twinkle+=p.twinkleSpeed;
+    if(p.x<0)p.x=W; if(p.x>W)p.x=0; if(p.y<0)p.y=H; if(p.y>H)p.y=0;
+    const tw=Math.sin(p.twinkle)*0.4+0.6;
+    const [r,g,b]=p.color;
+    const glow=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.r*7);
+    glow.addColorStop(0,`rgba(${r},${g},${b},${(p.alpha*tw*0.6).toFixed(3)})`);
+    glow.addColorStop(1,`rgba(${r},${g},${b},0)`);
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r*7,0,Math.PI*2);
+    ctx.fillStyle=glow; ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fillStyle=`rgba(${Math.min(r+80,255)},${Math.min(g+80,255)},255,${(p.alpha*tw).toFixed(3)})`; ctx.fill();
+  }
+  t+=0.011; requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>
