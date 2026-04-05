@@ -24,7 +24,8 @@ const blockedKeywords = [ // (kinda) stopping the gooners
   "sex",
   "xxx",
   "xvideos",
-  "rule34"
+  "rule34",
+  "r34",
 ];
 
 function isBlocked(url) {
