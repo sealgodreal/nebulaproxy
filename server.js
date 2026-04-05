@@ -11,7 +11,7 @@ const { createProxyServer } = require("http-proxy");
 const app = express();
 
 const httpAgent = new http.Agent({ keepAlive: true });
-const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: false });
+const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true }); // rejectUnauthorized: false - originally
 
 const wsProxy = createProxyServer({ changeOrigin: true, secure: false, ws: true });
 
@@ -19,8 +19,12 @@ const PREFIX = "/lessons/math";
 const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000 - for testin
 const cookieJarMap = new Map();
 
-const blockedKeywords = [
-  "test",
+const blockedKeywords = [ // im sorry breh but i cant get the proxy shutdown
+  "gore",
+  "porn",
+  "sex",
+  "xxx",
+  "xvideos",
 ];
 
 function isBlocked(url) {
