@@ -355,11 +355,34 @@ app.get(PREFIX, async (req, res) => {
       let body = await response.text();
 
       const script = clientScript(origin, target);
-      if (/<\/head>/i.test(body)) body = body.replace(/<\/head>/i, `${script}</head>`);
-      else body = script + body;
 
-      return res.send(body);
-    }
+      let injected = "";
+      if (req.query.classroom) {
+        try {
+          const decoded = decodeURIComponent(req.query.classroom);
+          injected = `
+    <script>
+    window.addEventListener("load", () => {
+      try {
+        ${decoded}
+      } catch (e) {
+        console.error("DevTools Injection Error:", e);
+      }
+    });
+    </script>`;
+    } catch {}
+  }
+
+  const fullInject = script + injected;
+
+  if (/<\/head>/i.test(body)) {
+    body = body.replace(/<\/head>/i, fullInject + "</head>");
+  } else {
+    body = fullInject + body;
+  }
+
+  return res.send(body);
+}
 
     if (contentType.includes("text/css")) {
       const css = await response.text();
