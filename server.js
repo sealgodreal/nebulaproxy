@@ -15,7 +15,7 @@ const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true }
 const wsProxy = createProxyServer({ changeOrigin: true, secure: false, ws: true });
 
 const PREFIX = "/lessons/math";
-const PROXY = "http://localhost:3000"; // http://localhost:3000 - for testin
+const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000 - for testin
 const cookieJarMap = new Map();
 
 const blockedKeywords = [ "porn", "gore", ];
