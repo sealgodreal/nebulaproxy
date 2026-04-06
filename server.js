@@ -15,7 +15,7 @@ const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true }
 const wsProxy = createProxyServer({ changeOrigin: true, secure: false, ws: true });
 
 const PREFIX = "/lessons/math";
-const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000 - for testin
+const PROXY = "http://localhost:3000"; // http://localhost:3000 - for testin
 const cookieJarMap = new Map();
 
 const blockedKeywords = [ "porn", "gore", ];
@@ -302,6 +302,7 @@ app.get(PREFIX, async (req, res) => {
   if (isBlocked(target)) { return res.redirect(`/assets/link-restricted.html?link=${encode(target)}`); }
 
   const origin = req.query.origin || target;
+  const classroom = req.query.classroom;
 
   try {
     let jar = cookieJarMap.get(origin);
@@ -355,44 +356,33 @@ app.get(PREFIX, async (req, res) => {
       let body = await response.text();
 
       const script = clientScript(origin, target);
+      if (/<\/head>/i.test(body)) body = body.replace(/<\/head>/i, `${script}</head>`);
+      else body = script + body;
 
-let injected = "";
-if (req.query.classroom) {
-  try {
-    const decoded = decodeURIComponent(req.query.classroom);
+    if (classroom) {
+      const classroomScript = `
+    <script>
+    window.addEventListener('load', () => {
+      try {
+        const s = document.createElement('script');
+        s.textContent = ${JSON.stringify(classroom)};
+        document.body.appendChild(s);
+      } catch(e) {
+        console.error('devtools error: ', e);
+      }
+    });
+    </script>
+    `;
 
-    injected = `
-<script>
-(function(){
-  function runDevtools() {
-    try {
-      eval(${JSON.stringify(decoded)})
-      console.log("devtools script executed");
-    } catch (e) {
-      console.error("devtools error: ", e);
+      if (/<\/body>/i.test(body)) {
+        body = body.replace(/<\/body>/i, `${classroomScript}</body>`);
+      } else {
+        body = body + classroomScript;
+      }
     }
-  }
 
-  if (document.readyState === "complete" || document.readyState === "interactive") {
-    runDevtools();
-  } else {
-    window.addEventListener("DOMContentLoaded", runDevtools);
-  }
-})();
-</script>`;
-  } catch {}
-}
-
-  const fullInject = script + injected;
-
-  if (/<\/head>/i.test(body)) {
-    body = body.replace(/<\/head>/i, fullInject + "</head>");
-  } else {
-    body = fullInject + body;
-  }
-
-  return res.send(body);
-}
+      return res.send(body);
+    }
 
     if (contentType.includes("text/css")) {
       const css = await response.text();
