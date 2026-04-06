@@ -356,22 +356,32 @@ app.get(PREFIX, async (req, res) => {
 
       const script = clientScript(origin, target);
 
-      let injected = "";
-      if (req.query.classroom) {
-        try {
-          const decoded = decodeURIComponent(req.query.classroom);
-          injected = `
-    <script>
-    window.addEventListener("load", () => {
-      try {
-        ${decoded}
-      } catch (e) {
-        console.error("DevTools Injection Error:", e);
-      }
-    });
-    </script>`;
-    } catch {}
+let injected = "";
+if (req.query.classroom) {
+  try {
+    const decoded = decodeURIComponent(req.query.classroom);
+
+    injected = `
+<script>
+(function(){
+  function runDevtools() {
+    try {
+      eval(${JSON.stringify(decoded)})
+      console.log("[DevTools] script executed");
+    } catch (e) {
+      console.error("[DevTools ERROR]", e);
+    }
   }
+
+  if (document.readyState === "complete" || document.readyState === "interactive") {
+    runDevtools();
+  } else {
+    window.addEventListener("DOMContentLoaded", runDevtools);
+  }
+})();
+</script>`;
+  } catch {}
+}
 
   const fullInject = script + injected;
 
