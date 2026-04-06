@@ -360,19 +360,25 @@ app.get(PREFIX, async (req, res) => {
       else body = script + body;
 
     if (classroom) {
-      const classroomScript = `
-    <script>
-    window.addEventListener('load', () => {
-      try {
-        const s = document.createElement('script');
-        s.textContent = ${JSON.stringify(classroom)};
-        document.body.appendChild(s);
-      } catch(e) {
-        console.error('devtools error: ', e);
-      }
-    });
-    </script>
-    `;
+const classroomScript = `
+<script>
+window.addEventListener('load', () => {
+  try {
+    if (window.__DEVTOOLS_SCRIPT_LOADED__) return;
+    window.__DEVTOOLS_SCRIPT_LOADED__ = true;
+    const script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.id = "devtools-script";
+    if (!document.getElementById("devtools-script")) {
+      script.text = decodeURIComponent("${encodeURIComponent(classroom)}");
+      document.body.appendChild(script);
+    }
+  } catch(e) {
+    console.error('devtools error: ', e);
+  }
+});
+</script>
+`;
 
       if (/<\/body>/i.test(body)) {
         body = body.replace(/<\/body>/i, `${classroomScript}</body>`);
