@@ -367,9 +367,9 @@ if (req.query.classroom) {
   function runDevtools() {
     try {
       eval(${JSON.stringify(decoded)})
-      console.log("[DevTools] script executed");
+      console.log("devtools script executed");
     } catch (e) {
-      console.error("[DevTools ERROR]", e);
+      console.error("devtools error: ", e);
     }
   }
 
