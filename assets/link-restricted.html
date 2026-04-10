@@ -97,67 +97,130 @@ body {
   }
 })();
 
-const canvas = document.getElementById('bg');
-const ctx = canvas.getContext('2d');
-const colors = [[80,82,88],[140,140,148],[200,200,205],[55,58,65],[110,115,125]];
-const numlines = 70, numparticles = 80;
-function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
-window.addEventListener('resize', resize); resize();
-const particles = Array.from({length: numparticles}, () => {
-  const ci = Math.floor(Math.random() * colors.length);
-  return { x: Math.random()*canvas.width, y: Math.random()*canvas.height, r: Math.random()*1.4+0.3, speed: Math.random()*0.25+0.05, angle: Math.random()*Math.PI*2, alpha: Math.random()*0.5+0.15, color: colors[ci], twinkle: Math.random()*Math.PI*2, twinkleSpeed: Math.random()*0.04+0.01 };
-});
-const STARS = Array.from({length:120}, () => ({ x: Math.random()*canvas.width, y: Math.random()*canvas.height, r: Math.random()*0.8+0.2, alpha: Math.random()*0.6+0.1, twinkle: Math.random()*Math.PI*2 }));
-let t = 0;
-function waveY(x, i, time) {
-  const base = (i/numlines)*canvas.height;
-  const freq1=0.003+i*0.00004, freq2=0.007+i*0.00003;
-  const amp1=35+Math.sin(i*0.28)*22, amp2=18+Math.cos(i*0.45)*12;
-  const warp=Math.sin(x*0.0018+time*0.35+i*0.09)*45;
-  return base+Math.sin(x*freq1+time*0.6+i*0.2)*amp1+Math.sin(x*freq2-time*0.45+i*0.28)*amp2+warp;
-}
-function lineColor(i, time) {
-  const tc=(i/numlines+time*0.015)%1;
-  const seg=tc*colors.length, i0=Math.floor(seg)%colors.length, i1=(i0+1)%colors.length, f=seg-Math.floor(seg);
-  const c0=colors[i0], c1=colors[i1];
-  return [c0[0]+(c1[0]-c0[0])*f, c0[1]+(c1[1]-c0[1])*f, c0[2]+(c1[2]-c0[2])*f];
-}
-function getLineAlpha(i, time) {
-  const pulse=Math.sin(time*1.1+i*0.14)*0.5+0.5;
-  return (0.04+pulse*0.18)*(1-Math.abs(i/numlines-0.5)*0.8);
-}
-function draw() {
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  const W=canvas.width, H=canvas.height;
-  for(let i=0;i<numlines;i++){
+  const sped = 5;
+
+  const canvas = document.getElementById("bg");
+  const ctx = canvas.getContext("2d");
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  window.addEventListener("resize", () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  });
+
+  const SHADES = [
+    "rgba(255,255,255,",
+    "rgba(235,235,235,",
+    "rgba(210,210,210,",
+    "rgba(185,185,185,",
+    "rgba(160,160,160,",
+    "rgba(220,220,220,",
+  ];
+
+  function spawnParticle() {
+    const w = canvas.width, h = canvas.height;
+    const edge = Math.random();
+    let x, y, vx, vy;
+    const baseSpeed = 0.35 + Math.random() * 0.55;
+    const speed = baseSpeed * sped;
+
+    if (edge < 0.45) {
+      x = Math.random() * w * 0.65;
+      y = h * (0.92 + Math.random() * 0.08);
+      const angle = -(Math.PI * 0.18 + Math.random() * Math.PI * 0.28);
+      vx = speed * Math.cos(angle) * (0.6 + Math.random() * 0.6);
+      vy = speed * Math.sin(angle) * (0.8 + Math.random() * 0.5);
+    } else if (edge < 0.85) {
+      x = w * (Math.random() * 0.05);
+      y = h * (0.35 + Math.random() * 0.65);
+      const angle = -(Math.PI * 0.08 + Math.random() * Math.PI * 0.3);
+      vx = speed * (0.7 + Math.random() * 0.5);
+      vy = -speed * (0.3 + Math.random() * 0.5);
+    } else {
+      x = w * (Math.random() * 0.1);
+      y = h * (0.85 + Math.random() * 0.15);
+      const angle = -(Math.PI * 0.22 + Math.random() * Math.PI * 0.22);
+      vx = speed * Math.cos(angle) * (0.6 + Math.random() * 0.7);
+      vy = speed * Math.sin(angle) * (0.7 + Math.random() * 0.5);
+    }
+
+    return {
+      x, y, vx, vy,
+      size: 0.8 + Math.random() * 2.2,
+      shade: SHADES[Math.floor(Math.random() * SHADES.length)],
+      alpha: 0.25 + Math.random() * 0.5,
+      frame: 0,
+      wobbleAmp: 0.2 + Math.random() * 0.9,
+      wobbleFreq: 0.015 + Math.random() * 0.025,
+      wobbleOffset: Math.random() * Math.PI * 2,
+      curve: (Math.random() - 0.35) * 0.006,
+    };
+  }
+
+  function stepParticle(p) {
+    p.vx += p.curve;
+    p.x += p.vx + Math.sin(p.frame * p.wobbleFreq + p.wobbleOffset) * p.wobbleAmp;
+    p.y += p.vy;
+    p.frame++;
+  }
+
+  function isOffscreen(p) {
+    return p.x > canvas.width + 20 || p.y < -20 || p.x < -20 || p.y > canvas.height + 20;
+  }
+
+  function drawParticle(p) {
     ctx.beginPath();
-    for(let x=0;x<=W;x+=2){ const y=waveY(x,i,t); x===0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
-    const [r,g,b]=lineColor(i,t);
-    ctx.strokeStyle=`rgba(${r|0},${g|0},${b|0},${getLineAlpha(i,t).toFixed(3)})`;
-    ctx.lineWidth=0.6; ctx.stroke();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fillStyle = p.shade + p.alpha.toFixed(3) + ")";
+    ctx.fill();
   }
-  for(const s of STARS){
-    const a=Math.sin(t*1.5+s.twinkle)*0.3+0.7;
-    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
-    ctx.fillStyle=`rgba(220,220,255,${(s.alpha*a).toFixed(3)})`; ctx.fill();
+
+  function seedParticles(count) {
+    const w = canvas.width, h = canvas.height;
+    const cols = Math.ceil(Math.sqrt(count * (w / h)));
+    const rows = Math.ceil(count / cols);
+    const cellW = w / cols;
+    const cellH = h / rows;
+    const result = [];
+
+    for (let row = 0; row < rows && result.length < count; row++) {
+      for (let col = 0; col < cols && result.length < count; col++) {
+        const targetX = col * cellW + Math.random() * cellW;
+        const targetY = row * cellH + Math.random() * cellH;
+
+        let best = null;
+        let bestDist = Infinity;
+        for (let attempt = 0; attempt < 30; attempt++) {
+          const p = spawnParticle();
+          const preFrames = Math.floor(10 + Math.random() * 500);
+          for (let f = 0; f < preFrames; f++) stepParticle(p);
+          if (isOffscreen(p)) continue;
+          const dist = Math.hypot(p.x - targetX, p.y - targetY);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = p;
+          }
+          if (dist < Math.max(cellW, cellH) * 0.5) break;
+        }
+        result.push(best || spawnParticle());
+      }
+    }
+    return result;
   }
-  for(const p of particles){
-    p.x+=Math.cos(p.angle)*p.speed; p.y+=Math.sin(p.angle)*p.speed;
-    p.angle+=(Math.random()-0.5)*0.04; p.twinkle+=p.twinkleSpeed;
-    if(p.x<0)p.x=W; if(p.x>W)p.x=0; if(p.y<0)p.y=H; if(p.y>H)p.y=0;
-    const tw=Math.sin(p.twinkle)*0.4+0.6;
-    const [r,g,b]=p.color;
-    const glow=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.r*7);
-    glow.addColorStop(0,`rgba(${r},${g},${b},${(p.alpha*tw*0.6).toFixed(3)})`);
-    glow.addColorStop(1,`rgba(${r},${g},${b},0)`);
-    ctx.beginPath(); ctx.arc(p.x,p.y,p.r*7,0,Math.PI*2);
-    ctx.fillStyle=glow; ctx.fill();
-    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
-    ctx.fillStyle=`rgba(${Math.min(r+80,255)},${Math.min(g+80,255)},255,${(p.alpha*tw).toFixed(3)})`; ctx.fill();
+
+  const PARTICLE_COUNT = 55;
+  const particles = seedParticles(PARTICLE_COUNT);
+
+  function animate() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < particles.length; i++) {
+      if (isOffscreen(particles[i])) particles[i] = spawnParticle();
+      stepParticle(particles[i]);
+      drawParticle(particles[i]);
+    }
+    requestAnimationFrame(animate);
   }
-  t+=0.011; requestAnimationFrame(draw);
-}
-draw();
+  requestAnimationFrame(animate);
 </script>
 </body>
 </html>
