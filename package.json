@@ -19,6 +19,9 @@
     "express": "^5.2.1",
     "http-proxy": "^1.18.1",
     "node-fetch": "^2.7.0",
+    "puppeteer": "^24.42.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "tough-cookie": "^6.0.1"
   }
 }

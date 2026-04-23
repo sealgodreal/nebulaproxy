@@ -6,8 +6,13 @@ const http = require("http");
 const https = require("https");
 const { CookieJar } = require("tough-cookie");
 const { createProxyServer } = require("http-proxy");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+puppeteer.use(StealthPlugin());
 
 const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true });
@@ -294,6 +299,413 @@ function clientScript(origin, base) {
 })();
 </script>`;
 }
+
+app.get("/lessons/algebra", (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg:        #000000;
+      --surface:   #0f0f0f;
+      --surface-2: #1a1a1a;
+      --border:    #2a2a2a;
+      --border-2:  #333333;
+      --text:      #ffffff;
+      --muted:     #888888;
+      --accent:    #222222;
+      --accent-dim:#333333;
+      --btn-bg:    #111111;
+      --btn-hover: #222222;
+      --btn-text:  #f0f0f0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      gap: 28px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 320px;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+    }
+
+    .card-header {
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.01em;
+    }
+
+    .card-subtitle {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .fields {
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    input {
+      width: 100%;
+      padding: 9px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    input::placeholder {
+      color: var(--muted);
+      opacity: 0.5;
+    }
+
+    input:focus {
+      border-color: var(--border-2);
+      background: var(--surface-2);
+    }
+
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    input[type=number] { -moz-appearance: textfield; }
+
+    .card-footer {
+      padding: 4px 20px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    button {
+      width: 100%;
+      padding: 10px;
+      background: var(--accent);
+      color: var(--btn-text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border: none;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+
+    button:hover  { opacity: 0.88; }
+    button:active { opacity: 0.72; transform: scale(0.99); }
+
+    #log {
+      display: none;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 10px 12px;
+      max-height: 120px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-2) transparent;
+    }
+
+    #log.visible { display: block; }
+
+    #log .entry {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+
+    #log .entry::before {
+      content: '› ';
+      color: var(--border-2);
+    }
+
+    #log .entry.done {
+      color: var(--accent);
+    }
+
+    #log .entry.done::before {
+      content: '✓ ';
+      color: var(--accent-dim);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Nebula | Blooket Flooder</div>
+      <div class="card-subtitle">floods any blooket game with bots.</div>
+    </div>
+
+    <div class="fields">
+      <div class="field">
+        <label for="code">id</label>
+        <input id="code" placeholder="0000000" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="count">amount</label>
+        <input id="count" type="number" value="2" min="1" max="100">
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <button onclick="start()">flood</button>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <script>
+    const logEl = document.getElementById("log");
+
+    function log(msg, done = false) {
+      logEl.classList.add("visible");
+      const line = document.createElement("div");
+      line.className = "entry" + (done ? " done" : "");
+      line.textContent = msg;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function start() {
+      const code  = document.getElementById("code").value.trim(); 
+      const count = parseInt(document.getElementById("count").value);
+
+      logEl.innerHTML = "";
+      logEl.classList.remove("visible");
+
+      if (!code) return log("please enter a game id.");
+
+      log("launching " + count + " bot" + (count !== 1 ? "s" : "") + ", please wait...");
+
+      const res  = await fetch("/lessons/algebra/helping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, count })
+      });
+
+      const data = await res.json();
+      data.forEach(r => log(r));
+      log("finished flood attack!", true);
+    }
+  </script>
+
+</body>
+</html>
+  `);
+});
+
+let browser;
+
+async function getBrowser() {
+  if (!browser) {
+    try {
+      browser = await puppeteer.launch({
+        headless: true,
+        timeout: 60000,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-blink-features=AutomationControlled",
+          "--disable-dev-shm-usage"
+        ]
+      });
+    } catch (err) {
+      console.error("Failed to launch browser:", err);
+      browser = null;
+      throw err;
+    }
+  }
+  return browser;
+}
+
+async function joinBot(code, name, index = 0) {
+  const browser = await getBrowser();
+
+  await new Promise(r => setTimeout(r, (index + 1) * 100));
+
+  const page = await browser.newPage();
+
+  await page.setRequestInterception(true);
+  page.on("request", req => {
+    if (["image", "font", "media"].includes(req.resourceType())) req.abort();
+    else req.continue();
+  });
+
+  try {
+    await page.setViewport({ width: 1280, height: 720 });
+
+    await page.goto("https://play.blooket.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000
+    });
+
+    page.click(".cky-btn-accept").catch(() => {});
+
+    await page.waitForSelector('input[name="join-code"]', { timeout: 20000 });
+    await page.type('input[name="join-code"]', code, { delay: 5 });
+
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }),
+      page.click('button[aria-label="Submit"]')
+    ]);
+
+    await new Promise(r => setTimeout(r, 1000));
+
+    const nickSelectors = [
+      'input[placeholder="Nickname"]',
+      'input[placeholder*="name" i]',
+      'input[placeholder="Enter Nickname"]',
+      'input[type="text"]'
+    ];
+
+    let typed = false;
+    for (const sel of nickSelectors) {
+      try {
+        await page.waitForSelector(sel, { timeout: 5000 });
+        await page.type(sel, name, { delay: 5 });
+        typed = true;
+        break;
+      } catch {}
+    }
+
+    if (!typed) throw new Error(`${name}: could not find nickname field`);
+
+    const joinSelectors = [
+      '[class*="joinButton"]',
+      '[aria-label*="join" i]',
+      'button[type="submit"]'
+    ];
+
+    let clicked = false;
+    for (const sel of joinSelectors) {
+      try {
+        await page.waitForSelector(sel, { timeout: 5000 });
+        await page.click(sel);
+        clicked = true;
+        break;
+      } catch {}
+    }
+
+    if (!clicked) throw new Error(`${name}: could not find join button`);
+
+    setInterval(async () => {
+      try {
+        await page.mouse.move(
+          300 + Math.random() * 10,
+          300 + Math.random() * 10
+        );
+      } catch {}
+    }, 3000);
+
+    return `joined as \"${name}\"`;
+  } catch (e) {
+    console.error(`[${name}] error:`, e.message.toLowerCase());
+    await page.close();
+    return `failed: ${name} — ${e.message.toLowerCase()}`;
+  }
+}
+
+async function runLimited(tasks, limit) {
+  const results = [];
+  const executing = [];
+
+  for (const task of tasks) {
+    const p = task().then(r => {
+      results.push(r);
+      executing.splice(executing.indexOf(p), 1);
+    });
+    executing.push(p);
+
+    if (executing.length >= limit) {
+      await Promise.race(executing);
+    }
+  }
+
+  await Promise.all(executing);
+  return results;
+}
+
+app.post("/lessons/algebra/helping", async (req, res) => {
+  const { code, count } = req.body;
+
+  if (!code || !count) {
+    return res.json(["Missing code or count"]);
+  }
+
+  const tasks = [];
+
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const usedNames = new Set();
+
+  for (let i = 1; i <= count; i++) {
+    let name;
+    do {
+      name = "";
+      for (let j = 0; j < 8; j++) {
+        name += chars[Math.floor(Math.random() * chars.length)];
+      }
+    } while (usedNames.has(name) && usedNames.size < Math.pow(chars.length, 8));
+    usedNames.add(name);
+
+    const index = i - 1;
+    tasks.push(() => joinBot(code, name, index));
+  }
+
+  const concurrency = Math.min(count, 8);
+  const results = await runLimited(tasks, concurrency);
+
+  res.json(results);
+});
 
 app.get(PREFIX, async (req, res) => {
   const target = req.query.url;
