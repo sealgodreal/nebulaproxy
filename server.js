@@ -1,16 +1,14 @@
-// ts code so beautiful twin
 const express = require("express");
 const fetch = require("node-fetch");
+const cors = require("cors");
 const { URL } = require("url");
 const http = require("http");
 const https = require("https");
 const { CookieJar } = require("tough-cookie");
 const { createProxyServer } = require("http-proxy");
-const puppeteer = require("puppeteer-extra");
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-puppeteer.use(StealthPlugin());
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -20,26 +18,8 @@ const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true }
 const wsProxy = createProxyServer({ changeOrigin: true, secure: false, ws: true });
 
 const PREFIX = "/lessons/math";
-const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000 - for testin
+const PROXY = "https://onlinehomeworkhelper.onrender.com";
 const cookieJarMap = new Map();
-
-const blockedKeywords = [ "porn", "gore", ];
-const blockedLinks = [ "pornhub.com", "brazzers.com",  "rule34.xxx", "xvideos.com", ];
-
-function isBlocked(url) {
-  try {
-    const parsed = new URL(url);
-    const hostname = parsed.hostname.toLowerCase();
-    const origin = parsed.origin.toLowerCase();
-
-    if (blockedLinks.some(link => hostname === link.toLowerCase())) { return true; }
-    if (blockedKeywords.some(k => hostname.includes(k))) { return true; }
-
-    return false;
-  } catch {
-    return false;
-  }
-}
 
 function encode(url) { return encodeURIComponent(url); }
 
@@ -48,7 +28,6 @@ function proxify(url, base) {
     if (!url || url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("javascript:") || url.startsWith("#")) return url;
     if (url.includes(PREFIX)) return url;
     const abs = new URL(url, base).href;
-    if (isBlocked(abs)) { return `/assets/link-restricted.html?link=${encode(abs)}`; }
     return `${PREFIX}?url=${encode(abs)}&origin=${encode(base)}`;
   } catch {
     return url;
@@ -68,7 +47,7 @@ function rewriteCss(css, base) {
 function rewriteJs(js, base) {
   js = js.replace(/\bfetch\s*\(\s*(['"`])(\/?[^'"` ]+)\1/g, (m, q, u) => {
     try {
-      if (u.startsWith("data:") || u.startsWith("blob:")) return m;
+      if (u.startsWith("data:") || u.startsWith("blob:") || u.startsWith("javascript:")) return m;
       const abs = new URL(u, base).href;
       return `fetch(${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
     } catch { return m; }
@@ -76,9 +55,41 @@ function rewriteJs(js, base) {
 
   js = js.replace(/\.open\s*\(\s*(['"`][A-Z]+['"`])\s*,\s*(['"`])(\/?[^'"` ]+)\2/g, (m, method, q, u) => {
     try {
-      if (u.startsWith("data:") || u.startsWith("blob:")) return m;
+      if (u.startsWith("data:") || u.startsWith("blob:") || u.startsWith("javascript:")) return m;
       const abs = new URL(u, base).href;
       return `.open(${method}, ${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
+    } catch { return m; }
+  });
+
+  js = js.replace(/location\.href\s*=\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
+    try {
+      if (u.startsWith("data:") || u.startsWith("blob:") || u.startsWith("javascript:")) return m;
+      const abs = new URL(u, base).href;
+      return `location.href = ${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
+    } catch { return m; }
+  });
+
+  js = js.replace(/window\.location\s*=\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
+    try {
+      if (u.startsWith("data:") || u.startsWith("blob:") || u.startsWith("javascript:")) return m;
+      const abs = new URL(u, base).href;
+      return `window.location = ${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
+    } catch { return m; }
+  });
+
+  js = js.replace(/window\.open\s*\(\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
+    try {
+      if (u.startsWith("data:") || u.startsWith("blob:") || u.startsWith("javascript:")) return m;
+      const abs = new URL(u, base).href;
+      return `window.open(${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
+    } catch { return m; }
+  });
+
+  js = js.replace(/\.src\s*=\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
+    try {
+      if (u.startsWith("data:") || u.startsWith("blob:")) return m;
+      const abs = new URL(u, base).href;
+      return `.src = ${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
     } catch { return m; }
   });
 
@@ -86,7 +97,7 @@ function rewriteJs(js, base) {
 }
 
 function rewriteHtmlAttrs(body, base) {
-  body = body.replace(/(src|href|action)\s*=\s*(['"])([^'"]+)\2/gi, (m, attr, q, u) => {
+  body = body.replace(/(src|href|action|poster|data|formaction|ping|launch)\s*=\s*(['"])([^'"]+)\2/gi, (m, attr, q, u) => {
     return `${attr}=${q}${proxify(u, base)}${q}`;
   });
 
@@ -97,12 +108,12 @@ function rewriteHtmlAttrs(body, base) {
     return `srcset=${q}${rewritten}${q}`;
   });
 
-  body = body.replace(/(launch)\s*=\s*(['"])([^'"]+)\2/gi, (m, attr, q, u) => {
-    return `${attr}=${q}${proxify(u, base)}${q}`;
-  });
-
-  body = body.replace(/(\bon\w+)\s*=\s*(['"])([^'"]+)\2/gi, (m, attr, q, u) => {
-    return `${attr}=${q}${u.replace(/(https?:\/\/[^\s"'<>]+)/gi, (_, aq, url) => proxify(url, base))}${q}`;
+  body = body.replace(/on\w+\s*=\s*(['"])([^'"]*(?:https?:\/\/|javascript:)[^'"]*)\1/gi, (m, q, code) => {
+    const rewritten = code
+      .replace(/(https?:\/\/[^\s"'<>]+)/g, u => proxify(u, base))
+      .replace(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/g, (mm, u) => `window.location.href = '${proxify(u, base)}'`)
+      .replace(/location\.href\s*=\s*['"]([^'"]+)['"]/g, (mm, u) => `location.href = '${proxify(u, base)}'`);
+    return `on${m.substring(2, 3).toLowerCase()}${m.substring(3, m.indexOf('='))}=${q}${rewritten}${q}`;
   });
 
   return body;
@@ -137,10 +148,13 @@ function clientScript(origin, base) {
     try {
       if (
         !url ||
+        typeof url !== 'string' ||
         url.startsWith("data:") ||
         url.startsWith("blob:") ||
         url.startsWith("javascript:") ||
         url.startsWith("#") ||
+        url.startsWith("mailto:") ||
+        url.startsWith("tel:") ||
         url.includes("/lessons/math?url=")
       ) return url;
 
@@ -163,7 +177,7 @@ function clientScript(origin, base) {
   }
 
   let _baseUrl;
-  try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://example.com"); } // yes, example.com
+  try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://example.com"); }
 
   const _realOrigin   = _baseUrl.origin;
   const _realHost     = _baseUrl.host;
@@ -208,24 +222,46 @@ function clientScript(origin, base) {
       if (!el || el.nodeType !== 1) return;
       if (el.tagName === "SCRIPT") return;
 
+      const urlAttrs = ["href", "src", "action", "launch", "poster", "data", "formaction", "ping"];
       for (const attr of el.attributes) {
         const name = attr.name.toLowerCase();
         let value = attr.value;
         if (!value) continue;
 
-        if (["href", "src", "action", "launch"].includes(name)) {
+        if (urlAttrs.includes(name)) {
           if (!value.includes("/lessons/math?url=")) {
             el.setAttribute(attr.name, proxify(value));
           }
-        } else if (/^on/.test(name)) {
-          const rewritten = value.replace(/(https?:\\/\\/[^\\s"'<>]+)/g, proxify);
+        }
+        else if (name === "srcset") {
+          const rewritten = value.replace(/([^\\s,]+)(\\s+[\\d.]+[wx])?/g, (m, url, desc) => {
+            return proxify(url) + (desc || "");
+          });
           if (rewritten !== value) el.setAttribute(attr.name, rewritten);
+        }
+        else if (/^on/.test(name) && typeof value === "string") {
+          const rewritten = value
+            .replace(/(https?:\\/\\/[^\\s"'<>]+)/g, proxify)
+            .replace(/window\\.location\\.href\\s*=\\s*['"](.*?)['"]/g, (m, u) => {
+              return "window.location.href = '" + proxify(u) + "'";
+            })
+            .replace(/location\\.href\\s*=\\s*['"](.*?)['"]/g, (m, u) => {
+              return "location.href = '" + proxify(u) + "'";
+            });
+          if (rewritten !== value) el.setAttribute(attr.name, rewritten);
+        }
+        else if (name.startsWith("data-") && typeof value === "string") {
+          if (value.match(/^https?:\\/\\//) || value.match(/^\\/[\\w]/)) {
+            el.setAttribute(attr.name, proxify(value));
+          }
         }
       }
 
       if (el.hasAttribute("style")) {
         const css = el.getAttribute("style");
-        const rewritten = css.replace(/url\\((['"]?)([^'")]+)\\1\\)/gi, (_, q, u) => "url(" + q + proxify(u) + q + ")");
+        const rewritten = css.replace(/url\\(\\s*(['\"]?)([^'")]+)\\1\\s*\\)/gi, (m, q, u) => {
+          return "url(" + q + proxify(u) + q + ")";
+        });
         if (rewritten !== css) el.setAttribute("style", rewritten);
       }
     } catch {}
@@ -247,22 +283,38 @@ function clientScript(origin, base) {
   const origFetch = window.fetch;
   window.fetch = async function(url, ...args) {
     try {
-      url = typeof url === 'string' ? proxify(url) : new Request(proxify(url.url), url);
+      if (typeof url === 'string') {
+        url = proxify(url);
+      } else if (url && typeof url === 'object' && url.url) {
+        url = new Request(proxify(url.url), url);
+      }
     } catch {}
-    return origFetch(url, ...args);
+    return origFetch.call(this, url, ...args);
   };
 
   const _open = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    try { url = proxify(url); } catch {}
-    return _open.call(this, method, url, ...rest);
+  XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
+    try { 
+      url = proxify(url); 
+    } catch {}
+    return _open.call(this, method, url, async, user, pass);
+  };
+
+  const _send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(data) {
+    return _send.call(this, data);
+  };
+
+  const _setReqHeader = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+    return _setReqHeader.call(this, header, value);
   };
 
   const _WS = window.WebSocket;
   window.WebSocket = function(url, protocols) {
     try {
-      const proxied = proxifyWs(url);
-      const wsUrl = proxied.replace(/^https?:/, location.protocol === "https:" ? "wss:" : "ws:");
+      const abs = new URL(url, BASE).href;
+      const wsUrl = abs.replace(/^https?:/, location.protocol === "https:" ? "wss:" : "ws:");
       return protocols ? new _WS(wsUrl, protocols) : new _WS(wsUrl);
     } catch {
       return protocols ? new _WS(url, protocols) : new _WS(url);
@@ -272,11 +324,15 @@ function clientScript(origin, base) {
   const _push = history.pushState.bind(history);
   const _replace = history.replaceState.bind(history);
   history.pushState = function(s, t, u) {
-    if (u && !String(u).includes("/lessons/math")) return _push(s, t, proxify(String(u)));
+    if (u && !String(u).includes("/lessons/math")) {
+      return _push(s, t, proxify(String(u)));
+    }
     return _push(s, t, u);
   };
   history.replaceState = function(s, t, u) {
-    if (u && !String(u).includes("/lessons/math")) return _replace(s, t, proxify(String(u)));
+    if (u && !String(u).includes("/lessons/math")) {
+      return _replace(s, t, proxify(String(u)));
+    }
     return _replace(s, t, u);
   };
 
@@ -284,7 +340,7 @@ function clientScript(origin, base) {
     const a = e.target.closest("a[href]");
     if (!a) return;
     const raw = a.getAttribute("href");
-    if (!raw || raw.startsWith("/lessons/math")) return;
+    if (!raw || raw.startsWith("/lessons/math") || raw.startsWith("javascript:") || raw.startsWith("#")) return;
     e.preventDefault();
     location.href = proxify(raw);
   }, true);
@@ -292,429 +348,88 @@ function clientScript(origin, base) {
   document.addEventListener("submit", e => {
     e.preventDefault();
     const f = e.target;
-    const q = new URLSearchParams(new FormData(f)).toString();
-    location.href = proxify(f.action + (q ? "?" + q : ""));
+    const action = f.getAttribute("action") || "";
+    if (!action || action.includes("/lessons/math")) {
+      return f.submit();
+    }
+    const fd = new FormData(f);
+    const q = new URLSearchParams(fd).toString();
+    location.href = proxify(action + (q ? "?" + q : ""));
   }, true);
+
+  const origImage = window.Image;
+  window.Image = function() {
+    const img = new origImage();
+    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(img), 'src');
+    Object.defineProperty(img, 'src', {
+      set(val) { desc.set.call(this, proxify(val)); },
+      get() { return desc.get.call(this); },
+      configurable: true
+    });
+    return img;
+  };
+
+  const origOpen = window.open;
+  window.open = function(url, target, features) {
+    if (url) url = proxify(url);
+    return origOpen(url, target, features);
+  };
+
+  const scriptProto = HTMLScriptElement.prototype;
+  const srcDesc = Object.getOwnPropertyDescriptor(scriptProto, 'src') || {
+    set: function(val) { this.setAttribute('src', val); },
+    get: function() { return this.getAttribute('src'); }
+  };
+  Object.defineProperty(scriptProto, 'src', {
+    set(val) { srcDesc.set.call(this, proxify(val)); },
+    get() { return srcDesc.get.call(this); },
+    configurable: true
+  });
+
+  const imgProto = HTMLImageElement.prototype;
+  const imgSrcDesc = Object.getOwnPropertyDescriptor(imgProto, 'src') || {
+    set: function(val) { this.setAttribute('src', val); },
+    get: function() { return this.getAttribute('src'); }
+  };
+  Object.defineProperty(imgProto, 'src', {
+    set(val) { imgSrcDesc.set.call(this, proxify(val)); },
+    get() { return imgSrcDesc.get.call(this); },
+    configurable: true
+  });
+
+  const elements = ['HTMLAnchorElement', 'HTMLLinkElement', 'HTMLScriptElement', 'HTMLImageElement', 'HTMLVideoElement', 'HTMLAudioElement', 'HTMLSourceElement', 'HTMLIFrameElement'];
+  elements.forEach(name => {
+    try {
+      const proto = window[name]?.prototype;
+      if (!proto) return;
+      
+      if (name !== 'HTMLImageElement' && name !== 'HTMLScriptElement') {
+        const desc = Object.getOwnPropertyDescriptor(proto, 'href') || Object.getOwnPropertyDescriptor(proto, 'src');
+        if (desc) {
+          Object.defineProperty(proto, 'href', {
+            set(val) { desc.set?.call(this, proxify(val)) || this.setAttribute('href', proxify(val)); },
+            get() { return desc.get?.call(this) || this.getAttribute('href'); },
+            configurable: true
+          });
+          Object.defineProperty(proto, 'src', {
+            set(val) { desc.set?.call(this, proxify(val)) || this.setAttribute('src', proxify(val)); },
+            get() { return desc.get?.call(this) || this.getAttribute('src'); },
+            configurable: true
+          });
+        }
+      }
+    } catch {}
+  });
 
 })();
 </script>`;
 }
 
-app.get("/lessons/algebra", (req, res) => {
-    res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <style>
-    *, *::before, *::after {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    :root {
-      --bg:        #000000;
-      --surface:   #0f0f0f;
-      --surface-2: #1a1a1a;
-      --border:    #2a2a2a;
-      --border-2:  #333333;
-      --text:      #ffffff;
-      --muted:     #888888;
-      --accent:    #222222;
-      --accent-dim:#333333;
-      --btn-bg:    #111111;
-      --btn-hover: #222222;
-      --btn-text:  #f0f0f0;
-    }
-
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'DM Sans', sans-serif;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      gap: 28px;
-    }
-
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      width: 320px;
-      overflow: hidden;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
-    }
-
-    .card-header {
-      padding: 18px 20px 14px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .card-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text);
-      letter-spacing: 0.01em;
-    }
-
-    .card-subtitle {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 2px;
-    }
-
-    .fields {
-      padding: 16px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .field {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-    }
-
-    label {
-      font-size: 11px;
-      font-weight: 500;
-      color: var(--muted);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
-
-    input {
-      width: 100%;
-      padding: 9px 12px;
-      background: var(--surface-2);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      color: var(--text);
-      font-family: 'DM Mono', monospace;
-      font-size: 13px;
-      outline: none;
-      transition: border-color 0.15s, background 0.15s;
-    }
-
-    input::placeholder {
-      color: var(--muted);
-      opacity: 0.5;
-    }
-
-    input:focus {
-      border-color: var(--border-2);
-      background: var(--surface-2);
-    }
-
-    input[type=number]::-webkit-inner-spin-button,
-    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
-    input[type=number] { -moz-appearance: textfield; }
-
-    .card-footer {
-      padding: 4px 20px 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    button {
-      width: 100%;
-      padding: 10px;
-      background: var(--accent);
-      color: var(--btn-text);
-      font-family: 'DM Sans', sans-serif;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      border: none;
-      border-radius: 7px;
-      cursor: pointer;
-      transition: opacity 0.15s, transform 0.1s;
-    }
-
-    button:hover  { opacity: 0.88; }
-    button:active { opacity: 0.72; transform: scale(0.99); }
-
-    #log {
-      display: none;
-      background: var(--surface-2);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 10px 12px;
-      max-height: 120px;
-      overflow-y: auto;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border-2) transparent;
-    }
-
-    #log.visible { display: block; }
-
-    #log .entry {
-      font-family: 'DM Mono', monospace;
-      font-size: 11px;
-      line-height: 1.7;
-      color: var(--muted);
-    }
-
-    #log .entry::before {
-      content: '› ';
-      color: var(--border-2);
-    }
-
-    #log .entry.done {
-      color: var(--accent);
-    }
-
-    #log .entry.done::before {
-      content: '✓ ';
-      color: var(--accent-dim);
-    }
-  </style>
-</head>
-<body>
-
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">Nebula | Blooket Flooder</div>
-      <div class="card-subtitle">floods any blooket game with bots.</div>
-    </div>
-
-    <div class="fields">
-      <div class="field">
-        <label for="code">id</label>
-        <input id="code" placeholder="0000000" autocomplete="off" spellcheck="false">
-      </div>
-      <div class="field">
-        <label for="count">amount</label>
-        <input id="count" type="number" value="2" min="1" max="100">
-      </div>
-    </div>
-
-    <div class="card-footer">
-      <button onclick="start()">flood</button>
-      <div id="log"></div>
-    </div>
-  </div>
-
-  <script>
-    const logEl = document.getElementById("log");
-
-    function log(msg, done = false) {
-      logEl.classList.add("visible");
-      const line = document.createElement("div");
-      line.className = "entry" + (done ? " done" : "");
-      line.textContent = msg;
-      logEl.appendChild(line);
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-
-    async function start() {
-      const code  = document.getElementById("code").value.trim(); 
-      const count = parseInt(document.getElementById("count").value);
-
-      logEl.innerHTML = "";
-      logEl.classList.remove("visible");
-
-      if (!code) return log("please enter a game id.");
-
-      log("launching " + count + " bot" + (count !== 1 ? "s" : "") + ", please wait...");
-
-      const res  = await fetch("/lessons/algebra/helping", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, count })
-      });
-
-      const data = await res.json();
-      data.forEach(r => log(r));
-      log("finished flood attack!", true);
-    }
-  </script>
-
-</body>
-</html>
-  `);
-});
-
-let browser;
-
-async function getBrowser() {
-  if (!browser) {
-    try {
-      browser = await puppeteer.launch({
-        headless: true,
-        timeout: 60000,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-blink-features=AutomationControlled",
-          "--disable-dev-shm-usage"
-        ]
-      });
-    } catch (err) {
-      console.error("Failed to launch browser:", err);
-      browser = null;
-      throw err;
-    }
-  }
-  return browser;
-}
-
-async function joinBot(code, name, index = 0) {
-  const browser = await getBrowser();
-
-  await new Promise(r => setTimeout(r, (index + 1) * 100));
-
-  const page = await browser.newPage();
-
-  await page.setRequestInterception(true);
-  page.on("request", req => {
-    if (["image", "font", "media"].includes(req.resourceType())) req.abort();
-    else req.continue();
-  });
-
-  try {
-    await page.setViewport({ width: 1280, height: 720 });
-
-    await page.goto("https://play.blooket.com/", {
-      waitUntil: "domcontentloaded",
-      timeout: 30000
-    });
-
-    page.click(".cky-btn-accept").catch(() => {});
-
-    await page.waitForSelector('input[name="join-code"]', { timeout: 20000 });
-    await page.type('input[name="join-code"]', code, { delay: 5 });
-
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }),
-      page.click('button[aria-label="Submit"]')
-    ]);
-
-    await new Promise(r => setTimeout(r, 1000));
-
-    const nickSelectors = [
-      'input[placeholder="Nickname"]',
-      'input[placeholder*="name" i]',
-      'input[placeholder="Enter Nickname"]',
-      'input[type="text"]'
-    ];
-
-    let typed = false;
-    for (const sel of nickSelectors) {
-      try {
-        await page.waitForSelector(sel, { timeout: 5000 });
-        await page.type(sel, name, { delay: 5 });
-        typed = true;
-        break;
-      } catch {}
-    }
-
-    if (!typed) throw new Error(`${name}: could not find nickname field`);
-
-    const joinSelectors = [
-      '[class*="joinButton"]',
-      '[aria-label*="join" i]',
-      'button[type="submit"]'
-    ];
-
-    let clicked = false;
-    for (const sel of joinSelectors) {
-      try {
-        await page.waitForSelector(sel, { timeout: 5000 });
-        await page.click(sel);
-        clicked = true;
-        break;
-      } catch {}
-    }
-
-    if (!clicked) throw new Error(`${name}: could not find join button`);
-
-    setInterval(async () => {
-      try {
-        await page.mouse.move(
-          300 + Math.random() * 10,
-          300 + Math.random() * 10
-        );
-      } catch {}
-    }, 3000);
-
-    return `joined as \"${name}\"`;
-  } catch (e) {
-    console.error(`[${name}] error:`, e.message.toLowerCase());
-    await page.close();
-    return `failed: ${name} — ${e.message.toLowerCase()}`;
-  }
-}
-
-async function runLimited(tasks, limit) {
-  const results = [];
-  const executing = [];
-
-  for (const task of tasks) {
-    const p = task().then(r => {
-      results.push(r);
-      executing.splice(executing.indexOf(p), 1);
-    });
-    executing.push(p);
-
-    if (executing.length >= limit) {
-      await Promise.race(executing);
-    }
-  }
-
-  await Promise.all(executing);
-  return results;
-}
-
-app.post("/lessons/algebra/helping", async (req, res) => {
-  const { code, count } = req.body;
-
-  if (!code || !count) {
-    return res.json(["Missing code or count"]);
-  }
-
-  const tasks = [];
-
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const usedNames = new Set();
-
-  for (let i = 1; i <= count; i++) {
-    let name;
-    do {
-      name = "";
-      for (let j = 0; j < 8; j++) {
-        name += chars[Math.floor(Math.random() * chars.length)];
-      }
-    } while (usedNames.has(name) && usedNames.size < Math.pow(chars.length, 8));
-    usedNames.add(name);
-
-    const index = i - 1;
-    tasks.push(() => joinBot(code, name, index));
-  }
-
-  const concurrency = Math.min(count, 8);
-  const results = await runLimited(tasks, concurrency);
-
-  res.json(results);
-});
-
 app.get(PREFIX, async (req, res) => {
   const target = req.query.url;
-  if (!target) return res.status(400).send("Missing url");
-
-  if (isBlocked(target)) { return res.redirect(`/assets/link-restricted.html?link=${encode(target)}`); }
+  if (!target) return res.status(400).send("missing url");
 
   const origin = req.query.origin || target;
-  const classroom = req.query.classroom;
 
   try {
     let jar = cookieJarMap.get(origin);
@@ -722,7 +437,24 @@ app.get(PREFIX, async (req, res) => {
 
     const cookies = await jar.getCookieString(target);
 
-    const response = await fetch(target, {
+    const method = req.method;
+
+let body = undefined;
+
+if (method !== "GET" && method !== "HEAD") {
+  body = req.body;
+
+  const contentType = req.headers["content-type"] || "";
+  if (typeof body === "object" && contentType.includes("application/json")) {
+    body = JSON.stringify(body);
+  }
+
+  if (typeof body === "object" && contentType.includes("application/x-www-form-urlencoded")) {
+    body = new URLSearchParams(body).toString();
+  }
+}
+
+const response = await fetch(target, {
       agent: target.startsWith("https") ? httpsAgent : httpAgent,
       redirect: "manual",
       headers: {
@@ -767,37 +499,13 @@ app.get(PREFIX, async (req, res) => {
     if (contentType.includes("text/html")) {
       let body = await response.text();
 
+      body = rewriteHtmlAttrs(body, target);
+      body = rewriteInlineStyles(body, target);
+      body = rewriteStyleBlocks(body, target);
+
       const script = clientScript(origin, target);
       if (/<\/head>/i.test(body)) body = body.replace(/<\/head>/i, `${script}</head>`);
       else body = script + body;
-
-    if (classroom) {
-const classroomScript = `
-<script>
-window.addEventListener('load', () => {
-  try {
-    if (window.__DEVTOOLS_SCRIPT_LOADED__) return;
-    window.__DEVTOOLS_SCRIPT_LOADED__ = true;
-    const script = document.createElement('script');
-    script.type = 'text/javascript';
-    script.id = "devtools-script";
-    if (!document.getElementById("devtools-script")) {
-      script.text = decodeURIComponent("${encodeURIComponent(classroom)}");
-      document.body.appendChild(script);
-    }
-  } catch(e) {
-    console.error('devtools error: ', e);
-  }
-});
-</script>
-`;
-
-      if (/<\/body>/i.test(body)) {
-        body = body.replace(/<\/body>/i, `${classroomScript}</body>`);
-      } else {
-        body = body + classroomScript;
-      }
-    }
 
       return res.send(body);
     }
@@ -818,15 +526,12 @@ window.addEventListener('load', () => {
     else res.end();
 
   } catch (e) {
-    res.status(500).send("Proxy error: " + e.message);
+    res.status(500).send("proxy error: " + e.message);
   }
 });
 
-app.use("/assets", express.static(require("path").join(__dirname, "assets")));
-
 app.use((req, res) => {
-  if (req.path.startsWith("/assets")) { return res.status(404).send("Not found"); }
-  if (req.path.startsWith(PREFIX)) return res.status(404).send("Not found");
+  if (req.path.startsWith(PREFIX)) return res.status(404).send("not found");
 
   const referer = req.headers.referer || "";
   let origin = null;
@@ -844,7 +549,7 @@ app.use((req, res) => {
     } catch {}
   }
 
-  return res.status(400).send(`Something went wrong.`);
+  return res.status(400).send(`something went wrong.`);
 });
 
 const server = app.listen(3000, () => console.log("prxy runnin on port 3000 (used for testing)"));
