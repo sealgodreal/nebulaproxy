@@ -1,3 +1,5 @@
+// ts code so beautiful twin
+// i fixed sum of like the most important bugs like requests and js rewriting
 const express = require("express");
 const fetch = require("node-fetch");
 const cors = require("cors");
@@ -18,7 +20,7 @@ const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true }
 const wsProxy = createProxyServer({ changeOrigin: true, secure: false, ws: true });
 
 const PREFIX = "/lessons/math";
-const PROXY = "https://onlinehomeworkhelper.onrender.com";
+const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000
 const cookieJarMap = new Map();
 
 function encode(url) { return encodeURIComponent(url); }
@@ -177,7 +179,7 @@ function clientScript(origin, base) {
   }
 
   let _baseUrl;
-  try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://example.com"); }
+  try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://example.com"); } // yes, example.com
 
   const _realOrigin   = _baseUrl.origin;
   const _realHost     = _baseUrl.host;
@@ -425,7 +427,8 @@ function clientScript(origin, base) {
 </script>`;
 }
 
-app.get(PREFIX, async (req, res) => {
+
+app.all(PREFIX, async (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).send("missing url");
 
@@ -433,68 +436,91 @@ app.get(PREFIX, async (req, res) => {
 
   try {
     let jar = cookieJarMap.get(origin);
-    if (!jar) { jar = new CookieJar(); cookieJarMap.set(origin, jar); }
+    if (!jar) {
+      jar = new CookieJar();
+      cookieJarMap.set(origin, jar);
+    }
 
     const cookies = await jar.getCookieString(target);
 
-    const method = req.method;
+    const headers = { ...req.headers };
 
-let body = undefined;
+    const hopByHop = new Set([
+      "connection",
+      "keep-alive",
+      "proxy-authenticate",
+      "proxy-authorization",
+      "te",
+      "trailers",
+      "transfer-encoding",
+      "upgrade",
+      "host",
+      "content-length"
+    ]);
 
-if (method !== "GET" && method !== "HEAD") {
-  body = req.body;
+    for (const h of hopByHop) delete headers[h];
 
-  const contentType = req.headers["content-type"] || "";
-  if (typeof body === "object" && contentType.includes("application/json")) {
-    body = JSON.stringify(body);
-  }
+    headers["user-agent"] = headers["user-agent"] || "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+    headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+    headers["accept-language"] = "en-US,en;q=0.9";
+    headers["accept-encoding"] = "identity";
+    headers["connection"] = "keep-alive";
+    headers["upgrade-insecure-requests"] = "1";
+    headers["cache-control"] = "no-cache";
+    headers["cookie"] = cookies;
+    headers["referer"] = origin;
+    headers["origin"] = origin;
+    if (req.headers.range) { headers["range"] = req.headers.range; } // kinda useless
 
-  if (typeof body === "object" && contentType.includes("application/x-www-form-urlencoded")) {
-    body = new URLSearchParams(body).toString();
-  }
-}
+    let body;
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      body = req.body;
 
-const response = await fetch(target, {
-      agent: target.startsWith("https") ? httpsAgent : httpAgent,
-      redirect: "manual",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "identity",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Cache-Control": "max-age=0",
-        "Referer": origin,
-        "Origin": origin,
-        "Cookie": cookies
+      const ct = req.headers["content-type"] || "";
+
+      if (Buffer.isBuffer(body)) {
+      } else if (typeof body === "object" && ct.includes("application/json")) {
+        body = JSON.stringify(body);
+      } else if (typeof body === "object" && ct.includes("application/x-www-form-urlencoded")) {
+        body = new URLSearchParams(body).toString();
+      } else if (typeof body !== "string" && body) {
+        body = String(body);
       }
+    }
+
+    const response = await fetch(target, {
+      method: req.method,
+      headers,
+      body,
+      redirect: "manual",
+      agent: target.startsWith("https") ? httpsAgent : httpAgent
     });
 
-    const setCookieHeader = response.headers.raw()["set-cookie"];
-    if (setCookieHeader) setCookieHeader.forEach(c => jar.setCookieSync(c, target));
+    const setCookieHeader = response.headers.raw?.()["set-cookie"];
+    if (setCookieHeader) {
+      setCookieHeader.forEach(c => jar.setCookieSync(c, target));
+    }
 
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const loc = response.headers.get("location");
       if (loc) {
         const newUrl = new URL(loc, target).href;
-        return res.redirect(proxify(newUrl, origin));
+
+        return res.redirect(
+          `${PREFIX}?url=${encodeURIComponent(newUrl)}&origin=${encodeURIComponent(origin)}`
+        );
       }
     }
 
     const contentType = response.headers.get("content-type") || "";
-
     res.status(response.status);
-    ["content-type", "content-length", "accept-ranges", "content-range"].forEach(h => {
+
+    for (const h of ["content-type", "content-length", "accept-ranges", "content-range"]) {
       const v = response.headers.get(h);
       if (v) res.setHeader(h, v);
-    });
+    }
 
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "*");
-    res.setHeader("Service-Worker-Allowed", "/");
-    res.removeHeader("content-security-policy");
-    res.removeHeader("x-frame-options");
 
     if (contentType.includes("text/html")) {
       let body = await response.text();
@@ -504,26 +530,29 @@ const response = await fetch(target, {
       body = rewriteStyleBlocks(body, target);
 
       const script = clientScript(origin, target);
-      if (/<\/head>/i.test(body)) body = body.replace(/<\/head>/i, `${script}</head>`);
-      else body = script + body;
+
+      body = /<\/head>/i.test(body)
+        ? body.replace(/<\/head>/i, script + "</head>")
+        : script + body;
 
       return res.send(body);
     }
 
     if (contentType.includes("text/css")) {
       const css = await response.text();
-      res.setHeader("content-type", "text/css");
-      return res.send(rewriteCss(css, target));
+      return res.type("text/css").send(rewriteCss(css, target));
     }
 
     if (contentType.includes("javascript")) {
       const js = await response.text();
-      res.setHeader("content-type", contentType);
-      return res.send(rewriteJs(js, target));
+      return res.type("application/javascript").send(rewriteJs(js, target));
     }
 
-    if (response.body) response.body.pipe(res);
-    else res.end();
+    if (response.body) {
+      return response.body.pipe(res);
+    }
+
+    res.end();
 
   } catch (e) {
     res.status(500).send("proxy error: " + e.message);
