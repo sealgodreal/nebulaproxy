@@ -1,5 +1,11 @@
 // ts code so beautiful twin
-// i fixed sum of like the most important bugs like requests and js rewriting
+
+// list of fixes:
+// - js rewiriting (uses cheerio)
+// - helper scripts and functions
+// - fixed sum web issues like errors with javascript and cookies
+// - i forgot what else i did
+
 const express = require("express");
 const fetch = require("node-fetch");
 const cors = require("cors");
@@ -8,6 +14,11 @@ const http = require("http");
 const https = require("https");
 const { CookieJar } = require("tough-cookie");
 const { createProxyServer } = require("http-proxy");
+const cheerio = require("cheerio");
+const { pipeline } = require("stream/promises");
+
+const { parse } = require("meriyah");
+const { generate } = require("astring");
 
 const app = express();
 app.use(cors());
@@ -27,9 +38,19 @@ function encode(url) { return encodeURIComponent(url); }
 
 function proxify(url, base) {
   try {
-    if (!url || url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("javascript:") || url.startsWith("#")) return url;
-    if (url.includes(PREFIX)) return url;
-    const abs = new URL(url, base).href;
+    if (!url || typeof url !== "string") return url;
+    const trimmed = url.trim();
+    if (
+      trimmed.startsWith("data:") ||
+      trimmed.startsWith("blob:") ||
+      trimmed.startsWith("javascript:") ||
+      trimmed.startsWith("#") ||
+      trimmed.startsWith("mailto:") ||
+      trimmed.startsWith("tel:")
+    ) return url;
+    if (trimmed.includes(PREFIX + "?url=")) return url;
+    const normalized = trimmed.startsWith("//") ? "https:" + trimmed : trimmed;
+    const abs = new URL(normalized, base).href;
     return `${PREFIX}?url=${encode(abs)}&origin=${encode(base)}`;
   } catch {
     return url;
@@ -38,15 +59,64 @@ function proxify(url, base) {
 
 function rewriteCss(css, base) {
   css = css.replace(/url\(\s*(['"]?)([^'")\s]+)\1\s*\)/gi, (m, q, u) => {
+    if (!u || u.startsWith("data:") || u.startsWith("blob:")) return m;
     return `url(${q}${proxify(u, base)}${q})`;
   });
   css = css.replace(/@import\s+(['"])([^'"]+)\1/gi, (m, q, u) => {
     return `@import ${q}${proxify(u, base)}${q}`;
   });
+  css = css.replace(/@import\s+url\(\s*(['"]?)([^'")\s]+)\1\s*\)/gi, (m, q, u) => {
+    return `@import url(${q}${proxify(u, base)}${q})`;
+  });
   return css;
 }
 
-function rewriteJs(js, base) {
+function rewriteJsAst(js, base) {
+  let ast;
+  try {
+    ast = parse(js, { next: true, module: false, tolerant: true });
+  } catch {
+    return js;
+  }
+
+  function rewriteNode(node) {
+    if (!node || typeof node !== "object") return;
+
+    if (node.type === "Literal" && typeof node.value === "string") {
+      const v = node.value;
+      if (
+        (v.startsWith("http://") || v.startsWith("https://") || (v.startsWith("/") && v.length > 1 && !v.startsWith("//"))) &&
+        !v.includes(PREFIX + "?url=")
+      ) {
+        try {
+          const abs = new URL(v, base).href;
+          node.value = `${PREFIX}?url=${encode(abs)}&origin=${encode(base)}`;
+          node.raw = JSON.stringify(node.value);
+        } catch {}
+      }
+      return;
+    }
+
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (Array.isArray(child)) {
+        child.forEach(rewriteNode);
+      } else if (child && typeof child === "object" && child.type) {
+        rewriteNode(child);
+      }
+    }
+  }
+
+  rewriteNode(ast);
+
+  try {
+    return generate(ast);
+  } catch {
+    return js;
+  }
+}
+
+function rewriteJsRegex(js, base) {
   js = js.replace(/\bfetch\s*\(\s*(['"`])(\/?[^'"` ]+)\1/g, (m, q, u) => {
     try {
       if (u.startsWith("data:") || u.startsWith("blob:") || u.startsWith("javascript:")) return m;
@@ -87,38 +157,64 @@ function rewriteJs(js, base) {
     } catch { return m; }
   });
 
-  js = js.replace(/\.src\s*=\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
+js = js.replace(/\.src\s*=\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
+  try {
+    if (u.startsWith("data:") || u.startsWith("blob:")) return m;
+    const normalized = u.startsWith("//") ? "https:" + u : u;
+    const abs = new URL(normalized, base).href;
+    return `.src = ${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
+  } catch { return m; }
+});
+
+  js = js.replace(/\bimportScripts\s*\(\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
     try {
-      if (u.startsWith("data:") || u.startsWith("blob:")) return m;
       const abs = new URL(u, base).href;
-      return `.src = ${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
+      return `importScripts(${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
     } catch { return m; }
   });
 
   return js;
 }
 
-function rewriteHtmlAttrs(body, base) {
-  body = body.replace(/(src|href|action|poster|data|formaction|ping|launch)\s*=\s*(['"])([^'"]+)\2/gi, (m, attr, q, u) => {
-    return `${attr}=${q}${proxify(u, base)}${q}`;
+function rewriteJs(js, base) {
+  let out = js;
+  out = rewriteJsAst(js, base);
+  out = rewriteJsRegex(out, base);
+  return out;
+}
+
+function rewriteHtmlAttrs(html, base) {
+  const $ = cheerio.load(html, { decodeEntities: false });
+
+  $("base").remove();
+
+  const urlAttrs = ["src", "href", "action", "poster", "data", "formaction", "ping"];
+
+  $("*").each((_, el) => {
+    const $el = $(el);
+
+    for (const attr of urlAttrs) {
+      const val = $el.attr(attr);
+      if (val) $el.attr(attr, proxify(val, base));
+    }
+
+    const srcset = $el.attr("srcset");
+    if (srcset) {
+      const rewritten = srcset.replace(/([^\s,]+)(\s*\d+[wx]?)/g, (m, url, size) => {
+        return proxify(url, base) + size;
+      });
+      $el.attr("srcset", rewritten);
+    }
   });
 
-  body = body.replace(/srcset\s*=\s*(['"])([^'"]+)\1/gi, (m, q, val) => {
-    const rewritten = val.replace(/([^\s,]+)(\s*(?:\d+[wx])?)(?=,|$)/g, (mm, u, desc) => {
-      return proxify(u, base) + desc;
-    });
-    return `srcset=${q}${rewritten}${q}`;
+  $("link[rel='stylesheet']").each((_, el) => {
+    const href = $(el).attr("href");
+    if (href) $(el).attr("href", proxify(href, base));
   });
 
-  body = body.replace(/on\w+\s*=\s*(['"])([^'"]*(?:https?:\/\/|javascript:)[^'"]*)\1/gi, (m, q, code) => {
-    const rewritten = code
-      .replace(/(https?:\/\/[^\s"'<>]+)/g, u => proxify(u, base))
-      .replace(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/g, (mm, u) => `window.location.href = '${proxify(u, base)}'`)
-      .replace(/location\.href\s*=\s*['"]([^'"]+)['"]/g, (mm, u) => `location.href = '${proxify(u, base)}'`);
-    return `on${m.substring(2, 3).toLowerCase()}${m.substring(3, m.indexOf('='))}=${q}${rewritten}${q}`;
-  });
+  $("head").prepend(`<base href="${PROXY}${PREFIX}?url=${encode(base)}&origin=${encode(base)}">`);
 
-  return body;
+  return $.html();
 }
 
 function rewriteInlineStyles(body, base) {
@@ -161,7 +257,8 @@ function clientScript(origin, base) {
       ) return url;
 
       const base = BASE || window.location.href;
-      const abs = new URL(url, base).href;
+      const normalized = url.startsWith("//") ? "https:" + url : url;
+      const abs = new URL(normalized, base).href;
 
       return "/lessons/math?url=" + encodeURIComponent(abs) +
              "&origin=" + encodeURIComponent(ORIGIN);
@@ -170,16 +267,8 @@ function clientScript(origin, base) {
     }
   }
 
-  function proxifyWs(url) {
-    try {
-      if (url.includes("/lessons/math")) return url;
-      const abs = new URL(url, BASE).href;
-      return "/lessons/math?url=" + encodeURIComponent(abs) + "&origin=" + encodeURIComponent(ORIGIN);
-    } catch { return url; }
-  }
-
   let _baseUrl;
-  try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://example.com"); } // yes, example.com
+  try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://sealgodreal.github.io/nebulabrowser/assets/html/blank.html"); }
 
   const _realOrigin   = _baseUrl.origin;
   const _realHost     = _baseUrl.host;
@@ -217,94 +306,31 @@ function clientScript(origin, base) {
   try { Object.defineProperty(document, 'location', { get() { return _locationProxy; }, configurable: true }); } catch(e) {}
   try { Object.defineProperty(document, 'domain', { get() { return _realHostname; }, configurable: true }); } catch(e) {}
 
-  function fixEl(el) {
-    if (el.dataset.proxified) return;
-    el.dataset.proxified = "1";
-    try {
-      if (!el || el.nodeType !== 1) return;
-      if (el.tagName === "SCRIPT") return;
-
-      const urlAttrs = ["href", "src", "action", "launch", "poster", "data", "formaction", "ping"];
-      for (const attr of el.attributes) {
-        const name = attr.name.toLowerCase();
-        let value = attr.value;
-        if (!value) continue;
-
-        if (urlAttrs.includes(name)) {
-          if (!value.includes("/lessons/math?url=")) {
-            el.setAttribute(attr.name, proxify(value));
-          }
-        }
-        else if (name === "srcset") {
-          const rewritten = value.replace(/([^\\s,]+)(\\s+[\\d.]+[wx])?/g, (m, url, desc) => {
-            return proxify(url) + (desc || "");
-          });
-          if (rewritten !== value) el.setAttribute(attr.name, rewritten);
-        }
-        else if (/^on/.test(name) && typeof value === "string") {
-          const rewritten = value
-            .replace(/(https?:\\/\\/[^\\s"'<>]+)/g, proxify)
-            .replace(/window\\.location\\.href\\s*=\\s*['"](.*?)['"]/g, (m, u) => {
-              return "window.location.href = '" + proxify(u) + "'";
-            })
-            .replace(/location\\.href\\s*=\\s*['"](.*?)['"]/g, (m, u) => {
-              return "location.href = '" + proxify(u) + "'";
-            });
-          if (rewritten !== value) el.setAttribute(attr.name, rewritten);
-        }
-        else if (name.startsWith("data-") && typeof value === "string") {
-          if (value.match(/^https?:\\/\\//) || value.match(/^\\/[\\w]/)) {
-            el.setAttribute(attr.name, proxify(value));
-          }
-        }
-      }
-
-      if (el.hasAttribute("style")) {
-        const css = el.getAttribute("style");
-        const rewritten = css.replace(/url\\(\\s*(['\"]?)([^'")]+)\\1\\s*\\)/gi, (m, q, u) => {
-          return "url(" + q + proxify(u) + q + ")";
-        });
-        if (rewritten !== css) el.setAttribute("style", rewritten);
-      }
-    } catch {}
-  }
-
-  window.addEventListener("load", () => {
-    document.querySelectorAll("*").forEach(fixEl);
-
-    new MutationObserver(muts => {
-      muts.forEach(m => m.addedNodes.forEach(n => {
-        if (n.nodeType === 1) {
-          fixEl(n);
-          n.querySelectorAll && n.querySelectorAll("*").forEach(fixEl);
-        }
-      }));
-    }).observe(document, { childList: true, subtree: true });
-  });
-
   const origFetch = window.fetch;
-  window.fetch = async function(url, ...args) {
+  window.fetch = async function(input, init) {
     try {
-      if (typeof url === 'string') {
-        url = proxify(url);
-      } else if (url && typeof url === 'object' && url.url) {
-        url = new Request(proxify(url.url), url);
+      if (typeof input === "string") {
+        input = proxify(input);
+      } else if (input instanceof Request) {
+        input = new Request(proxify(input.url), {
+          method: input.method,
+          headers: input.headers,
+          body: input.body,
+          mode: input.mode,
+          credentials: input.credentials,
+          cache: input.cache,
+          redirect: input.redirect,
+          referrer: input.referrer
+        });
       }
     } catch {}
-    return origFetch.call(this, url, ...args);
+    return origFetch.call(this, input, init);
   };
 
   const _open = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
-    try { 
-      url = proxify(url); 
-    } catch {}
-    return _open.call(this, method, url, async, user, pass);
-  };
-
-  const _send = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.send = function(data) {
-    return _send.call(this, data);
+    try { url = proxify(url); } catch {}
+    return _open.call(this, method, url, async !== false, user, pass);
   };
 
   const _setReqHeader = XMLHttpRequest.prototype.setRequestHeader;
@@ -322,6 +348,10 @@ function clientScript(origin, base) {
       return protocols ? new _WS(url, protocols) : new _WS(url);
     }
   };
+  Object.defineProperty(window.WebSocket, 'CONNECTING', { value: _WS.CONNECTING });
+  Object.defineProperty(window.WebSocket, 'OPEN', { value: _WS.OPEN });
+  Object.defineProperty(window.WebSocket, 'CLOSING', { value: _WS.CLOSING });
+  Object.defineProperty(window.WebSocket, 'CLOSED', { value: _WS.CLOSED });
 
   const _push = history.pushState.bind(history);
   const _replace = history.replaceState.bind(history);
@@ -338,31 +368,10 @@ function clientScript(origin, base) {
     return _replace(s, t, u);
   };
 
-  document.addEventListener("click", e => {
-    const a = e.target.closest("a[href]");
-    if (!a) return;
-    const raw = a.getAttribute("href");
-    if (!raw || raw.startsWith("/lessons/math") || raw.startsWith("javascript:") || raw.startsWith("#")) return;
-    e.preventDefault();
-    location.href = proxify(raw);
-  }, true);
-
-  document.addEventListener("submit", e => {
-    e.preventDefault();
-    const f = e.target;
-    const action = f.getAttribute("action") || "";
-    if (!action || action.includes("/lessons/math")) {
-      return f.submit();
-    }
-    const fd = new FormData(f);
-    const q = new URLSearchParams(fd).toString();
-    location.href = proxify(action + (q ? "?" + q : ""));
-  }, true);
-
   const origImage = window.Image;
-  window.Image = function() {
-    const img = new origImage();
-    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(img), 'src');
+  window.Image = function(w, h) {
+    const img = new origImage(w, h);
+    const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
     Object.defineProperty(img, 'src', {
       set(val) { desc.set.call(this, proxify(val)); },
       get() { return desc.get.call(this); },
@@ -374,59 +383,240 @@ function clientScript(origin, base) {
   const origOpen = window.open;
   window.open = function(url, target, features) {
     if (url) url = proxify(url);
-    return origOpen(url, target, features);
+    return origOpen.call(window, url, target, features);
   };
 
-  const scriptProto = HTMLScriptElement.prototype;
-  const srcDesc = Object.getOwnPropertyDescriptor(scriptProto, 'src') || {
-    set: function(val) { this.setAttribute('src', val); },
-    get: function() { return this.getAttribute('src'); }
-  };
-  Object.defineProperty(scriptProto, 'src', {
-    set(val) { srcDesc.set.call(this, proxify(val)); },
-    get() { return srcDesc.get.call(this); },
-    configurable: true
-  });
+  try {
+    const scriptProto = HTMLScriptElement.prototype;
+    const srcDesc = Object.getOwnPropertyDescriptor(scriptProto, 'src') ||
+                    Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'src') ||
+                    Object.getOwnPropertyDescriptor(Element.prototype, 'src');
+    if (srcDesc && srcDesc.set) {
+      Object.defineProperty(scriptProto, 'src', {
+        set(val) {
+          let normalized = val;
+          if (typeof val === 'string' && val.startsWith('//')) {
+            normalized = 'https:' + val;
+          }
+          srcDesc.set.call(this, proxify(normalized));
+        },
+        get() { return srcDesc.get.call(this); },
+        configurable: true
+      });
+    }
+  } catch {}
 
-  const imgProto = HTMLImageElement.prototype;
-  const imgSrcDesc = Object.getOwnPropertyDescriptor(imgProto, 'src') || {
-    set: function(val) { this.setAttribute('src', val); },
-    get: function() { return this.getAttribute('src'); }
-  };
-  Object.defineProperty(imgProto, 'src', {
-    set(val) { imgSrcDesc.set.call(this, proxify(val)); },
-    get() { return imgSrcDesc.get.call(this); },
-    configurable: true
-  });
+  try {
+    const imgProto = HTMLImageElement.prototype;
+    const imgSrcDesc = Object.getOwnPropertyDescriptor(imgProto, 'src');
+    if (imgSrcDesc) {
+      Object.defineProperty(imgProto, 'src', {
+        set(val) { imgSrcDesc.set.call(this, proxify(val)); },
+        get() { return imgSrcDesc.get.call(this); },
+        configurable: true
+      });
+    }
+  } catch {}
 
-  const elements = ['HTMLAnchorElement', 'HTMLLinkElement', 'HTMLScriptElement', 'HTMLImageElement', 'HTMLVideoElement', 'HTMLAudioElement', 'HTMLSourceElement', 'HTMLIFrameElement'];
+  const elements = [
+    'HTMLAnchorElement',
+    'HTMLLinkElement',
+    'HTMLVideoElement',
+    'HTMLAudioElement',
+    'HTMLSourceElement',
+    'HTMLIFrameElement'
+  ];
   elements.forEach(name => {
     try {
       const proto = window[name]?.prototype;
       if (!proto) return;
-      
-      if (name !== 'HTMLImageElement' && name !== 'HTMLScriptElement') {
-        const desc = Object.getOwnPropertyDescriptor(proto, 'href') || Object.getOwnPropertyDescriptor(proto, 'src');
-        if (desc) {
-          Object.defineProperty(proto, 'href', {
-            set(val) { desc.set?.call(this, proxify(val)) || this.setAttribute('href', proxify(val)); },
-            get() { return desc.get?.call(this) || this.getAttribute('href'); },
-            configurable: true
-          });
-          Object.defineProperty(proto, 'src', {
-            set(val) { desc.set?.call(this, proxify(val)) || this.setAttribute('src', proxify(val)); },
-            get() { return desc.get?.call(this) || this.getAttribute('src'); },
-            configurable: true
-          });
-        }
+      for (const prop of ['href', 'src']) {
+        const desc = Object.getOwnPropertyDescriptor(proto, prop);
+        if (!desc || !desc.set) continue;
+        Object.defineProperty(proto, prop, {
+          set(val) { desc.set.call(this, proxify(val)); },
+          get() { return desc.get.call(this); },
+          configurable: true
+        });
       }
     } catch {}
   });
 
+  if (navigator.sendBeacon) {
+    const origBeacon = navigator.sendBeacon.bind(navigator);
+    navigator.sendBeacon = function(url, data) {
+      return origBeacon(proxify(url), data);
+    };
+  }
+
+  if (window.EventSource) {
+    const _ES = window.EventSource;
+    window.EventSource = function(url, config) {
+      return new _ES(proxify(url), config);
+    };
+  }
+
+  if (window.Worker) {
+    const _Worker = window.Worker;
+    window.Worker = function(url, opts) {
+      return new _Worker(proxify(url), opts);
+    };
+  }
+
+  const origCreate = document.createElement.bind(document);
+  document.createElement = function(tag, opts) {
+    const el = origCreate(tag, opts);
+    const t = (tag || "").toLowerCase();
+    if (t === "script" || t === "iframe" || t === "img") {
+      try {
+        const proto = Object.getPrototypeOf(el);
+        const desc = Object.getOwnPropertyDescriptor(proto, 'src') || Object.getOwnPropertyDescriptor(proto, 'href');
+        if (desc && desc.set) {
+          const prop = Object.getOwnPropertyDescriptor(proto, 'src') ? 'src' : 'href';
+          Object.defineProperty(el, prop, {
+            set(v) { desc.set.call(this, proxify(v)); },
+            get() { return desc.get.call(this); },
+            configurable: true
+          });
+        }
+      } catch {}
+    }
+    return el;
+  };
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      regs.forEach(r => r.unregister());
+    }).catch(() => {});
+    navigator.serviceWorker.register = () => Promise.reject(new Error("blocked by proxy"));
+  }
+
+  try {
+    Object.defineProperty(document, 'referrer', {
+      get() { return BASE; },
+      configurable: true
+    });
+  } catch {}
+
+  const _processed = new WeakSet();
+
+  function fixEl(el) {
+    if (!el || el.nodeType !== 1) return;
+    if (_processed.has(el)) return;
+    _processed.add(el);
+
+    try {
+      if (el.tagName === "SCRIPT") return;
+
+      const urlAttrs = ["href", "src", "action", "launch", "poster", "data", "formaction", "ping"];
+      for (const attr of el.attributes) {
+        const name = attr.name.toLowerCase();
+        let value = attr.value;
+        if (!value) continue;
+
+        if (urlAttrs.includes(name)) {
+          if (!value.includes("/lessons/math?url=")) {
+            el.setAttribute(attr.name, proxify(value));
+          }
+        } else if (name === "srcset") {
+          const rewritten = value.replace(/([^\s,]+)(\s+[\d.]+[wx])?/g, (m, url, desc) => {
+            return proxify(url) + (desc || "");
+          });
+          if (rewritten !== value) el.setAttribute(attr.name, rewritten);
+        } else if (/^on/.test(name) && typeof value === "string") {
+          const rewritten = value
+            .replace(/(https?:\/\/[^\s"'<>]+)/g, proxify)
+            .replace(/window\.location\.href\s*=\s*['"](.*?)['"]/g, (m, u) => {
+              return "window.location.href = '" + proxify(u) + "'";
+            })
+            .replace(/location\.href\s*=\s*['"](.*?)['"]/g, (m, u) => {
+              return "location.href = '" + proxify(u) + "'";
+            });
+          if (rewritten !== value) el.setAttribute(attr.name, rewritten);
+        } else if (name.startsWith("data-") && typeof value === "string") {
+          if (value.match(/^https?:\/\//) || value.match(/^\/[\w]/)) {
+            el.setAttribute(attr.name, proxify(value));
+          }
+        }
+      }
+
+      if (el.hasAttribute("style")) {
+        const css = el.getAttribute("style");
+        const rewritten = css.replace(new RegExp("url\\(\\s*(['\"]?)([^'\")]+)\\1\\s*\\)", "gi"), (m, q, u) => {
+          return "url(" + q + proxify(u) + q + ")";
+        });
+        if (rewritten !== css) el.setAttribute("style", rewritten);
+      }
+
+      const extraAttrs = ["data-href", "data-url", "data-src", "data-action"];
+      for (const attr of extraAttrs) {
+        const value = el.getAttribute(attr);
+        if (value && !value.includes("/lessons/math?url=")) {
+          el.setAttribute(attr, proxify(value));
+        }
+      }
+    } catch {}
+  }
+
+  function startDomRewriting() {
+    document.querySelectorAll("*").forEach(fixEl);
+
+    new MutationObserver(muts => {
+      for (const m of muts) {
+        if (m.type === "attributes" && m.target) {
+          const el = m.target;
+          if (!el || el.nodeType !== 1 || el.tagName === "SCRIPT") return;
+          const attr = m.attributeName;
+          const urlAttrs = ["href", "src", "action", "poster", "data", "formaction", "ping"];
+          if (urlAttrs.includes(attr)) {
+            const val = el.getAttribute(attr);
+            if (val && !val.includes("/lessons/math?url=")) {
+              el.setAttribute(attr, proxify(val));
+            }
+          }
+        }
+        if (m.addedNodes) {
+          m.addedNodes.forEach(n => {
+            if (n.nodeType === 1) {
+              fixEl(n);
+              n.querySelectorAll && n.querySelectorAll("*").forEach(fixEl);
+            }
+          });
+        }
+      }
+    }).observe(document.documentElement || document, { childList: true, subtree: true, attributes: true });
+
+    document.addEventListener("click", e => {
+      const a = e.target.closest("a[href]");
+      if (!a) return;
+      const raw = a.getAttribute("href");
+      if (!raw || raw.startsWith("/lessons/math") || raw.startsWith("javascript:") || raw.startsWith("#")) return;
+      e.preventDefault();
+      location.href = proxify(raw);
+    }, true);
+
+    document.addEventListener("submit", e => {
+      e.preventDefault();
+      const f = e.target;
+      const action = f.getAttribute("action") || "";
+      if (!action || action.includes("/lessons/math")) {
+        return f.submit();
+      }
+      const fd = new FormData(f);
+      const q = new URLSearchParams(fd).toString();
+      location.href = proxify(action + (q ? "?" + q : ""));
+    }, true);
+  }
+
+  if (document.readyState === "complete") {
+    startDomRewriting();
+  } else {
+    window.addEventListener("load", startDomRewriting, { once: true });
+  }
+
 })();
 </script>`;
 }
-
 
 app.all(PREFIX, async (req, res) => {
   const target = req.query.url;
@@ -435,15 +625,17 @@ app.all(PREFIX, async (req, res) => {
   const origin = req.query.origin || target;
 
   try {
-    let jar = cookieJarMap.get(origin);
+    const targetUrl = new URL(target);
+    const hostname = targetUrl.hostname;
+    const domainKey = hostname.split(".").slice(-2).join(".");
+
+    let jar = cookieJarMap.get(domainKey);
     if (!jar) {
       jar = new CookieJar();
-      cookieJarMap.set(origin, jar);
+      cookieJarMap.set(domainKey, jar);
     }
 
     const cookies = await jar.getCookieString(target);
-
-    const headers = { ...req.headers };
 
     const hopByHop = new Set([
       "connection",
@@ -458,25 +650,38 @@ app.all(PREFIX, async (req, res) => {
       "content-length"
     ]);
 
-    for (const h of hopByHop) delete headers[h];
+    const headers = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (!hopByHop.has(k.toLowerCase())) {
+        headers[k] = v;
+      }
+    }
 
-    headers["user-agent"] = headers["user-agent"] || "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+    headers["host"] = targetUrl.host;
+    headers["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
     headers["accept-language"] = "en-US,en;q=0.9";
     headers["accept-encoding"] = "identity";
     headers["connection"] = "keep-alive";
     headers["upgrade-insecure-requests"] = "1";
     headers["cache-control"] = "no-cache";
-    headers["cookie"] = cookies;
-    headers["referer"] = origin;
-    headers["origin"] = origin;
-    if (req.headers.range) { headers["range"] = req.headers.range; } // kinda useless
+    headers["referer"] = targetUrl.origin + "/";
+    headers["origin"] = targetUrl.origin;
+    headers["sec-fetch-dest"] = req.headers["sec-fetch-dest"] || "document";
+    headers["sec-fetch-mode"] = req.headers["sec-fetch-mode"] || "navigate";
+    headers["sec-fetch-site"] = "same-origin";
+
+    const incomingCookie = req.headers["cookie"] || "";
+    headers["cookie"] = incomingCookie
+      ? (cookies ? `${incomingCookie}; ${cookies}` : incomingCookie)
+      : cookies;
+
+    if (req.headers.range) headers["range"] = req.headers.range;
 
     let body;
     if (req.method !== "GET" && req.method !== "HEAD") {
-      body = req.body;
-
       const ct = req.headers["content-type"] || "";
+      body = req.body;
 
       if (Buffer.isBuffer(body)) {
       } else if (typeof body === "object" && ct.includes("application/json")) {
@@ -486,26 +691,43 @@ app.all(PREFIX, async (req, res) => {
       } else if (typeof body !== "string" && body) {
         body = String(body);
       }
+
+      if (body) {
+        headers["content-length"] = Buffer.byteLength(body).toString();
+      }
     }
 
-    const response = await fetch(target, {
-      method: req.method,
-      headers,
-      body,
-      redirect: "manual",
-      agent: target.startsWith("https") ? httpsAgent : httpAgent
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
-    const setCookieHeader = response.headers.raw?.()["set-cookie"];
-    if (setCookieHeader) {
-      setCookieHeader.forEach(c => jar.setCookieSync(c, target));
+    let response;
+    try {
+      response = await fetch(target, {
+        method: req.method,
+        headers,
+        body,
+        redirect: "manual",
+        agent: target.startsWith("https") ? httpsAgent : httpAgent,
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const rawHeaders = response.headers.raw ? response.headers.raw() : {};
+    const setCookieHeader = rawHeaders["set-cookie"] || [];
+    if (Array.isArray(setCookieHeader)) {
+      for (const c of setCookieHeader) {
+        try { jar.setCookieSync(c, target); } catch {}
+      }
+    } else if (typeof setCookieHeader === "string") {
+      try { jar.setCookieSync(setCookieHeader, target); } catch {}
     }
 
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const loc = response.headers.get("location");
       if (loc) {
         const newUrl = new URL(loc, target).href;
-
         return res.redirect(
           `${PREFIX}?url=${encodeURIComponent(newUrl)}&origin=${encodeURIComponent(origin)}`
         );
@@ -515,70 +737,110 @@ app.all(PREFIX, async (req, res) => {
     const contentType = response.headers.get("content-type") || "";
     res.status(response.status);
 
-    for (const h of ["content-type", "content-length", "accept-ranges", "content-range"]) {
-      const v = response.headers.get(h);
-      if (v) res.setHeader(h, v);
-    }
+    const blockedHeaders = new Set([
+      "content-security-policy",
+      "content-security-policy-report-only",
+      "x-frame-options",
+      "x-content-type-options",
+      "strict-transport-security",
+      "cross-origin-opener-policy",
+      "cross-origin-embedder-policy",
+      "cross-origin-resource-policy",
+      "permissions-policy"
+    ]);
 
+    response.headers.forEach((v, k) => {
+      if (!blockedHeaders.has(k.toLowerCase())) {
+        res.setHeader(k, v);
+      }
+    });
+
+    res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
 
     if (contentType.includes("text/html")) {
-      let body = await response.text();
+      let text = await response.text();
 
-      body = rewriteHtmlAttrs(body, target);
-      body = rewriteInlineStyles(body, target);
-      body = rewriteStyleBlocks(body, target);
+      text = rewriteHtmlAttrs(text, target);
+      text = rewriteInlineStyles(text, target);
+      text = rewriteStyleBlocks(text, target);
 
       const script = clientScript(origin, target);
 
-      body = /<\/head>/i.test(body)
-        ? body.replace(/<\/head>/i, script + "</head>")
-        : script + body;
+      text = /<\/head>/i.test(text)
+        ? text.replace(/<\/head>/i, script + "</head>")
+        : /<body/i.test(text)
+          ? text.replace(/<body[^>]*>/i, (m) => m + script)
+          : script + text;
 
-      return res.send(body);
+      return res.send(text);
     }
 
-    if (contentType.includes("text/css")) {
+    if (contentType.includes("css") || target.match(/\.css(\?|$)/)) {
       const css = await response.text();
-      return res.type("text/css").send(rewriteCss(css, target));
+      res.type("text/css");
+      return res.send(rewriteCss(css, target));
     }
 
-    if (contentType.includes("javascript")) {
+    if (contentType.includes("javascript") || contentType.includes("ecmascript") || target.match(/\.(m?js)(\?|$)/)) {
       const js = await response.text();
-      return res.type("application/javascript").send(rewriteJs(js, target));
+      res.type("application/javascript");
+      return res.send(rewriteJs(js, target));
     }
 
     if (response.body) {
-      return response.body.pipe(res);
+      try {
+        await pipeline(response.body, res);
+      } catch (pipeErr) {
+        if (!res.headersSent) res.status(500).end();
+      }
+      return;
     }
 
     res.end();
 
   } catch (e) {
-    res.status(500).send("proxy error: " + e.message);
+    if (!res.headersSent) {
+      res.status(500).send("proxy error: " + e.message);
+    }
   }
 });
 
 app.use((req, res) => {
   if (req.path.startsWith(PREFIX)) return res.status(404).send("not found");
 
+  let originBase = null;
+
   const referer = req.headers.referer || "";
-  let origin = null;
-
-  try {
-    const refUrl = new URL(referer);
-    const params = new URLSearchParams(refUrl.search);
-    origin = params.get("origin") || params.get("url");
-  } catch {}
-
-  if (origin) {
+  if (referer) {
     try {
-      const target = new URL(req.originalUrl, origin).href;
-      return res.redirect(`${PREFIX}?url=${encode(target)}&origin=${encode(origin)}`);
+      const refUrl = new URL(referer);
+      const params = new URLSearchParams(refUrl.search);
+      const urlParam = params.get("url");
+      const originParam = params.get("origin");
+      originBase = urlParam || originParam || null;
     } catch {}
   }
 
-  return res.status(400).send(`something went wrong.`);
+  if (!originBase) {
+    const originHeader = req.headers["origin"] || "";
+    if (originHeader && !originHeader.includes(new URL(PROXY).host)) {
+      originBase = originHeader;
+    }
+  }
+
+  if (originBase) {
+    try {
+      const target = new URL(req.originalUrl, originBase).href;
+      const originForProxy = new URL(originBase).origin;
+      return res.redirect(307,
+        `${PREFIX}?url=${encode(target)}&origin=${encode(originForProxy)}`
+      );
+    } catch {}
+  }
+
+  return res.status(400).send("something went wrong.");
 });
 
 const server = app.listen(3000, () => console.log("prxy runnin on port 3000 (used for testing)"));
@@ -589,8 +851,10 @@ server.on("upgrade", (req, socket, head) => {
     const target = url.searchParams.get("url");
     if (!target) return socket.destroy();
 
-    const wsTarget = target.replace(/^http/, "ws");
-    wsProxy.ws(req, socket, head, { target: wsTarget }, (err) => {
+    const parsed = new URL(target);
+    parsed.protocol = parsed.protocol === "https:" ? "wss:" : "ws:";
+
+    wsProxy.ws(req, socket, head, { target: parsed.href }, (err) => {
       if (err) socket.destroy();
     });
   } catch {

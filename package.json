@@ -15,10 +15,13 @@
     "@babel/generator": "^7.29.1",
     "@babel/parser": "^7.29.2",
     "@babel/traverse": "^7.29.0",
+    "astring": "^1.9.0",
+    "cheerio": "^1.2.0",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "http-proxy": "^1.18.1",
+    "meriyah": "^7.1.0",
     "node-fetch": "^2.7.0",
     "tough-cookie": "^6.0.1"
   }
