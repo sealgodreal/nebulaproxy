@@ -1,38 +1,66 @@
-// ts code so beautiful twin
-
-// list of fixes:
-// - js rewiriting (uses cheerio)
-// - helper scripts and functions
-// - fixed sum web issues like errors with javascript and cookies
-// - i forgot what else i did
-
 const express = require("express");
 const fetch = require("node-fetch");
 const cors = require("cors");
 const { URL } = require("url");
 const http = require("http");
 const https = require("https");
+const zlib = require("zlib");
+const { promisify } = require("util");
 const { CookieJar } = require("tough-cookie");
 const { createProxyServer } = require("http-proxy");
 const cheerio = require("cheerio");
 const { pipeline } = require("stream/promises");
-
+const { Readable } = require("stream");
 const { parse } = require("meriyah");
 const { generate } = require("astring");
-
+const gunzip = promisify(zlib.gunzip);
+const brotliDecompress = promisify(zlib.brotliDecompress);
+const inflate = promisify(zlib.inflate);
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-const httpAgent = new http.Agent({ keepAlive: true });
-const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true });
-
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64, maxFreeSockets: 16 });
+const httpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: true, maxSockets: 64, maxFreeSockets: 16 });
 const wsProxy = createProxyServer({ changeOrigin: true, secure: false, ws: true });
-
 const PREFIX = "/lessons/math";
-const PROXY = "https://onlinehomeworkhelper.onrender.com"; // http://localhost:3000
+const PROXY = "https://onlinehomeworkhelper.onrender.com";
 const cookieJarMap = new Map();
+const responseCache = new Map();
+const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+const CACHE_MAX_SIZE = 300;
+const CACHEABLE_CT = [
+  "javascript", "ecmascript",
+  "text/css",
+  "image/",
+  "font/",
+  "application/font",
+  "application/x-font",
+  "application/woff",
+];
+
+function isCacheable(contentType, method) {
+  if (method !== "GET") return false;
+  return CACHEABLE_CT.some(t => contentType.includes(t));
+}
+
+function cacheGet(url) {
+  const entry = responseCache.get(url);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_MAX_AGE_MS) {
+    responseCache.delete(url);
+    return null;
+  }
+  return entry;
+}
+
+function cacheSet(url, entry) {
+  if (responseCache.size >= CACHE_MAX_SIZE) {
+    const oldest = responseCache.keys().next().value;
+    responseCache.delete(oldest);
+  }
+  responseCache.set(url, { ...entry, ts: Date.now() });
+}
 
 function encode(url) { return encodeURIComponent(url); }
 
@@ -71,7 +99,11 @@ function rewriteCss(css, base) {
   return css;
 }
 
+const AST_SIZE_LIMIT = 150 * 1024;
+
 function rewriteJsAst(js, base) {
+  if (js.length > AST_SIZE_LIMIT) return js;
+
   let ast;
   try {
     ast = parse(js, { next: true, module: false, tolerant: true });
@@ -157,14 +189,14 @@ function rewriteJsRegex(js, base) {
     } catch { return m; }
   });
 
-js = js.replace(/\.src\s*=\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
-  try {
-    if (u.startsWith("data:") || u.startsWith("blob:")) return m;
-    const normalized = u.startsWith("//") ? "https:" + u : u;
-    const abs = new URL(normalized, base).href;
-    return `.src = ${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
-  } catch { return m; }
-});
+  js = js.replace(/\.src\s*=\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
+    try {
+      if (u.startsWith("data:") || u.startsWith("blob:")) return m;
+      const normalized = u.startsWith("//") ? "https:" + u : u;
+      const abs = new URL(normalized, base).href;
+      return `.src = ${q}${PREFIX}?url=${encode(abs)}&origin=${encode(base)}${q}`;
+    } catch { return m; }
+  });
 
   js = js.replace(/\bimportScripts\s*\(\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
     try {
@@ -177,8 +209,7 @@ js = js.replace(/\.src\s*=\s*(['"`])([^'"` ]+)\1/g, (m, q, u) => {
 }
 
 function rewriteJs(js, base) {
-  let out = js;
-  out = rewriteJsAst(js, base);
+  let out = rewriteJsAst(js, base);
   out = rewriteJsRegex(out, base);
   return out;
 }
@@ -213,6 +244,25 @@ function rewriteHtmlAttrs(html, base) {
   });
 
   $("head").prepend(`<base href="${PROXY}${PREFIX}?url=${encode(base)}&origin=${encode(base)}">`);
+
+$("link").each((_, el) => {
+  const rel = ($(el).attr("rel") || "").toLowerCase();
+  if (["preload", "prefetch", "modulepreload"].includes(rel)) {
+    const href = $(el).attr("href");
+    if (href) $(el).attr("href", proxify(href, base));
+  }
+});
+
+$('meta[http-equiv="refresh"]').each((_, el) => {
+  const content = $(el).attr("content");
+  if (!content) return;
+
+  const match = content.match(/url=(.*)$/i);
+  if (match) {
+    const newUrl = proxify(match[1], base);
+    $(el).attr("content", content.replace(match[1], newUrl));
+  }
+});
 
   return $.html();
 }
@@ -266,6 +316,27 @@ function clientScript(origin, base) {
       return url;
     }
   }
+
+const origFetch = window.fetch;
+window.fetch = async function(input, init) {
+  try {
+    if (input instanceof Request) {
+      input = new Request(proxify(input.url), {
+        method: input.method,
+        headers: input.headers,
+        body: input.body,
+        mode: input.mode,
+        credentials: input.credentials,
+        cache: input.cache,
+        redirect: input.redirect,
+        referrer: input.referrer
+      });
+    } else if (typeof input === "string") {
+      input = proxify(input);
+    }
+  } catch {}
+  return origFetch.call(this, input, init);
+};
 
   let _baseUrl;
   try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://sealgodreal.github.io/nebulabrowser/assets/html/blank.html"); }
@@ -327,6 +398,15 @@ function clientScript(origin, base) {
     return origFetch.call(this, input, init);
   };
 
+  const origSubmit = HTMLFormElement.prototype.submit;
+  HTMLFormElement.prototype.submit = function() {
+    try {
+      const action = this.action || location.href;
+      this.action = proxify(action);
+    } catch {}
+    return origSubmit.call(this);
+  };
+
   const _open = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
     try { url = proxify(url); } catch {}
@@ -384,6 +464,16 @@ function clientScript(origin, base) {
   window.open = function(url, target, features) {
     if (url) url = proxify(url);
     return origOpen.call(window, url, target, features);
+  };
+
+  const origWrite = document.write.bind(document);
+  document.write = function(html) {
+    try {
+      html = html.replace(/(src|href)=["']([^"']+)["']/gi, (m, attr, url) => {
+        return attr + '="' + proxify(url) + '"';
+      });
+    } catch {}
+    return origWrite(html);
   };
 
   try {
@@ -463,6 +553,15 @@ function clientScript(origin, base) {
     };
   }
 
+try {
+  const origImport = window.import;
+  if (origImport) {
+    window.import = function(url) {
+      return origImport(proxify(url));
+    };
+  }
+} catch {}
+
   const origCreate = document.createElement.bind(document);
   document.createElement = function(tag, opts) {
     const el = origCreate(tag, opts);
@@ -496,6 +595,18 @@ function clientScript(origin, base) {
       get() { return BASE; },
       configurable: true
     });
+  } catch {}
+
+  try {
+    const iframeProto = HTMLIFrameElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(iframeProto, 'src');
+    if (desc && desc.set) {
+      Object.defineProperty(iframeProto, 'src', {
+        set(val) { desc.set.call(this, proxify(val)); },
+        get() { return desc.get.call(this); },
+        configurable: true
+      });
+    }
   } catch {}
 
   const _processed = new WeakSet();
@@ -618,6 +729,18 @@ function clientScript(origin, base) {
 </script>`;
 }
 
+async function decompress(buffer, encoding) {
+  if (!encoding) return buffer;
+  const enc = encoding.toLowerCase().trim();
+  try {
+    if (enc === "gzip" || enc === "x-gzip") return await gunzip(buffer);
+    if (enc === "br") return await brotliDecompress(buffer);
+    if (enc === "deflate") return await inflate(buffer);
+  } catch {
+  }
+  return buffer;
+}
+
 app.all(PREFIX, async (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).send("missing url");
@@ -661,7 +784,7 @@ app.all(PREFIX, async (req, res) => {
     headers["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
     headers["accept-language"] = "en-US,en;q=0.9";
-    headers["accept-encoding"] = "identity";
+    headers["accept-encoding"] = "gzip, br, deflate";
     headers["connection"] = "keep-alive";
     headers["upgrade-insecure-requests"] = "1";
     headers["cache-control"] = "no-cache";
@@ -693,12 +816,25 @@ app.all(PREFIX, async (req, res) => {
       }
 
       if (body) {
-        headers["content-length"] = Buffer.byteLength(body).toString();
+        delete headers["content-length"];
+      }
+    }
+
+    const cacheKey = req.method === "GET" ? target : null;
+    if (cacheKey) {
+      const hit = cacheGet(cacheKey);
+      if (hit) {
+        res.status(hit.status);
+        for (const [k, v] of Object.entries(hit.headers)) {
+          res.setHeader(k, v);
+        }
+        res.setHeader("X-Proxy-Cache", "HIT");
+        return res.end(hit.body);
       }
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
     let response;
     try {
@@ -716,13 +852,23 @@ app.all(PREFIX, async (req, res) => {
 
     const rawHeaders = response.headers.raw ? response.headers.raw() : {};
     const setCookieHeader = rawHeaders["set-cookie"] || [];
-    if (Array.isArray(setCookieHeader)) {
-      for (const c of setCookieHeader) {
-        try { jar.setCookieSync(c, target); } catch {}
-      }
-    } else if (typeof setCookieHeader === "string") {
-      try { jar.setCookieSync(setCookieHeader, target); } catch {}
+    const cookieList = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+for (const c of cookieList) {
+  if (!c) continue;
+
+  try {
+    const cookie = require("tough-cookie").Cookie.parse(c);
+    if (!cookie) continue;
+
+    const hostname = new URL(target).hostname;
+
+    if (cookie.domain && !hostname.endsWith(cookie.domain.replace(/^\./, ""))) {
+      continue;
     }
+
+    jar.setCookieSync(cookie, target);
+  } catch {}
+}
 
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const loc = response.headers.get("location");
@@ -735,6 +881,7 @@ app.all(PREFIX, async (req, res) => {
     }
 
     const contentType = response.headers.get("content-type") || "";
+    const contentEncoding = response.headers.get("content-encoding") || "";
     res.status(response.status);
 
     const blockedHeaders = new Set([
@@ -746,12 +893,15 @@ app.all(PREFIX, async (req, res) => {
       "cross-origin-opener-policy",
       "cross-origin-embedder-policy",
       "cross-origin-resource-policy",
-      "permissions-policy"
+      "permissions-policy",
+      "content-encoding"
     ]);
 
+    const forwardedHeaders = {};
     response.headers.forEach((v, k) => {
       if (!blockedHeaders.has(k.toLowerCase())) {
         res.setHeader(k, v);
+        forwardedHeaders[k] = v;
       }
     });
 
@@ -760,36 +910,87 @@ app.all(PREFIX, async (req, res) => {
     res.setHeader("Access-Control-Allow-Credentials", "true");
 
     if (contentType.includes("text/html")) {
-      let text = await response.text();
+      const rawBuf = await response.buffer();
+      const decompressed = await decompress(rawBuf, contentEncoding);
+      let text = decompressed.toString("utf8");
 
       text = rewriteHtmlAttrs(text, target);
       text = rewriteInlineStyles(text, target);
       text = rewriteStyleBlocks(text, target);
 
       const script = clientScript(origin, target);
-
       text = /<\/head>/i.test(text)
         ? text.replace(/<\/head>/i, script + "</head>")
         : /<body/i.test(text)
           ? text.replace(/<body[^>]*>/i, (m) => m + script)
           : script + text;
 
+      res.setHeader("content-type", "text/html; charset=utf-8");
       return res.send(text);
     }
 
     if (contentType.includes("css") || target.match(/\.css(\?|$)/)) {
-      const css = await response.text();
-      res.type("text/css");
-      return res.send(rewriteCss(css, target));
+      const rawBuf = await response.buffer();
+      const decompressed = await decompress(rawBuf, contentEncoding);
+      const css = decompressed.toString("utf8");
+      const rewritten = rewriteCss(css, target);
+      const outBuf = Buffer.from(rewritten, "utf8");
+
+      res.setHeader("content-type", "text/css; charset=utf-8");
+      res.setHeader("cache-control", "public, max-age=300");
+
+      if (cacheKey && isCacheable(contentType, req.method)) {
+        cacheSet(cacheKey, {
+          status: response.status,
+          headers: { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=300" },
+          body: outBuf
+        });
+      }
+      return res.end(outBuf);
     }
 
     if (contentType.includes("javascript") || contentType.includes("ecmascript") || target.match(/\.(m?js)(\?|$)/)) {
-      const js = await response.text();
-      res.type("application/javascript");
-      return res.send(rewriteJs(js, target));
+      const rawBuf = await response.buffer();
+      const decompressed = await decompress(rawBuf, contentEncoding);
+      const js = decompressed.toString("utf8");
+      const rewritten = rewriteJs(js, target);
+      const outBuf = Buffer.from(rewritten, "utf8");
+
+      res.setHeader("content-type", "application/javascript; charset=utf-8");
+      res.setHeader("cache-control", "public, max-age=300");
+
+      if (cacheKey && isCacheable(contentType, req.method)) {
+        cacheSet(cacheKey, {
+          status: response.status,
+          headers: { "content-type": "application/javascript; charset=utf-8", "cache-control": "public, max-age=300" },
+          body: outBuf
+        });
+      }
+      return res.end(outBuf);
     }
 
     if (response.body) {
+      const isImage = contentType.startsWith("image/");
+      const isFont = contentType.includes("font") || contentType.includes("woff");
+
+      if ((isImage || isFont) && cacheKey) {
+        const rawBuf = await response.buffer();
+        if (rawBuf.length < 2 * 1024 * 1024) {
+          const decompressed = contentEncoding ? await decompress(rawBuf, contentEncoding) : rawBuf;
+          res.setHeader("cache-control", "public, max-age=300");
+          cacheSet(cacheKey, {
+            status: response.status,
+            headers: { ...forwardedHeaders, "cache-control": "public, max-age=300" },
+            body: decompressed
+          });
+          return res.end(decompressed);
+        }
+        res.setHeader("cache-control", "public, max-age=300");
+        const stream = Readable.from(rawBuf);
+        try { await pipeline(stream, res); } catch {}
+        return;
+      }
+
       try {
         await pipeline(response.body, res);
       } catch (pipeErr) {
