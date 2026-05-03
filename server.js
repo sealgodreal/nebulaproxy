@@ -38,6 +38,24 @@ const CACHEABLE_CT = [
   "application/x-font",
   "application/woff",
 ];
+const activeUsers = new Map();
+const USER_TIMEOUT_MS = 1 * 60 * 1000;
+
+function trackUser(req) {
+    const ip = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket.remoteAddress;
+    activeUsers.set(ip, Date.now());
+}
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, ts] of activeUsers) {
+        if (now - ts > USER_TIMEOUT_MS) activeUsers.delete(ip);
+    }
+}, 30_000);
+
+app.get("/onlinetutors", (req, res) => {
+    res.json({ count: activeUsers.size });
+});
 
 function isCacheable(contentType, method) {
   if (method !== "GET") return false;
@@ -744,6 +762,7 @@ async function decompress(buffer, encoding) {
 app.all(PREFIX, async (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).send("missing url");
+  trackUser(req);
 
   const origin = req.query.origin || target;
 
