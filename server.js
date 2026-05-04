@@ -27,7 +27,7 @@ const PREFIX = "/lessons/math";
 const PROXY = "https://onlinehomeworkhelper.onrender.com";
 const cookieJarMap = new Map();
 const responseCache = new Map();
-const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+const CACHE_MAX_AGE_MS = 3 * 60 * 1000;
 const CACHE_MAX_SIZE = 300;
 const CACHEABLE_CT = [
   "javascript", "ecmascript",
@@ -39,11 +39,35 @@ const CACHEABLE_CT = [
   "application/woff",
 ];
 const activeUsers = new Map();
-const USER_TIMEOUT_MS = 1 * 60 * 1000;
+const USER_TIMEOUT_MS = 5 * 60 * 1000;
+const { randomUUID } = require("crypto");
 
-function trackUser(req) {
-    const ip = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket.remoteAddress;
-    activeUsers.set(ip, Date.now());
+function trackUser(req, res) {
+  const cookies = parseCookies(req);
+  let id = cookies.uid;
+
+  if (!id) {
+    id = randomUUID();
+    res.setHeader("Set-Cookie", `uid=${id}; Path=/; HttpOnly; Max-Age=604800`);
+  }
+
+  activeUsers.set(id, Date.now());
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const cookies = {};
+
+  header.split(";").forEach(cookie => {
+    const parts = cookie.split("=");
+    if (parts.length >= 2) {
+      const key = parts.shift().trim();
+      const value = parts.join("=").trim();
+      cookies[key] = decodeURIComponent(value);
+    }
+  });
+
+  return cookies;
 }
 
 setInterval(() => {
@@ -53,7 +77,13 @@ setInterval(() => {
     }
 }, 30_000);
 
+app.post("/ping", (req, res) => {
+  trackUser(req, res);
+  res.sendStatus(200);
+});
+
 app.get("/onlinetutors", (req, res) => {
+    trackUser(req, res);
     res.json({ count: activeUsers.size });
 });
 
@@ -324,9 +354,15 @@ function clientScript(origin, base) {
         url.includes("/lessons/math?url=")
       ) return url;
 
-      const base = BASE || window.location.href;
+      function getBase() {
+  try {
+    return new URL(BASE);
+  } catch {
+    return new URL(window.location.href);
+  }
+}
       const normalized = url.startsWith("//") ? "https:" + url : url;
-      const abs = new URL(normalized, base).href;
+      const abs = new URL(normalized, getBase()).href;
 
       return "/lessons/math?url=" + encodeURIComponent(abs) +
              "&origin=" + encodeURIComponent(ORIGIN);
@@ -334,27 +370,6 @@ function clientScript(origin, base) {
       return url;
     }
   }
-
-const origFetch = window.fetch;
-window.fetch = async function(input, init) {
-  try {
-    if (input instanceof Request) {
-      input = new Request(proxify(input.url), {
-        method: input.method,
-        headers: input.headers,
-        body: input.body,
-        mode: input.mode,
-        credentials: input.credentials,
-        cache: input.cache,
-        redirect: input.redirect,
-        referrer: input.referrer
-      });
-    } else if (typeof input === "string") {
-      input = proxify(input);
-    }
-  } catch {}
-  return origFetch.call(this, input, init);
-};
 
   let _baseUrl;
   try { _baseUrl = new URL(BASE); } catch { _baseUrl = new URL("https://sealgodreal.github.io/nebulabrowser/assets/html/blank.html"); }
@@ -395,26 +410,87 @@ window.fetch = async function(input, init) {
   try { Object.defineProperty(document, 'location', { get() { return _locationProxy; }, configurable: true }); } catch(e) {}
   try { Object.defineProperty(document, 'domain', { get() { return _realHostname; }, configurable: true }); } catch(e) {}
 
-  const origFetch = window.fetch;
-  window.fetch = async function(input, init) {
-    try {
-      if (typeof input === "string") {
-        input = proxify(input);
-      } else if (input instanceof Request) {
-        input = new Request(proxify(input.url), {
-          method: input.method,
-          headers: input.headers,
-          body: input.body,
-          mode: input.mode,
-          credentials: input.credentials,
-          cache: input.cache,
-          redirect: input.redirect,
-          referrer: input.referrer
-        });
-      }
-    } catch {}
+const origFetch = window.fetch;
+window.fetch = async function(input, init = {}) {
+  try {
+    let url;
+    let opts = { ...init };
+
+    if (typeof input === "string") {
+      url = input;
+    } else if (input instanceof URL) {
+      url = input.href;
+    } else if (input instanceof Request) {
+      url = input.url;
+
+      opts = {
+        method: input.method,
+        headers: new Headers(input.headers),
+        body: input.body,
+        mode: input.mode,
+        credentials: input.credentials,
+        cache: input.cache,
+        redirect: input.redirect,
+        referrer: input.referrer,
+        integrity: input.integrity,
+        keepalive: input.keepalive,
+        signal: input.signal
+      };
+    } else {
+      return origFetch.call(this, input, init);
+    }
+
+    const proxiedUrl = proxify(url);
+
+    if (!opts.credentials) {
+      opts.credentials = "same-origin";
+    }
+
+    return origFetch.call(this, proxiedUrl, opts);
+  } catch (e) {
     return origFetch.call(this, input, init);
-  };
+  }
+};
+
+const OrigRequest = window.Request;
+
+window.Request = function(input, options = {}) {
+  try {
+    if (typeof input === "string" || input instanceof URL) {
+      input = proxify(input.toString());
+    } else if (input instanceof OrigRequest) {
+      input = proxify(input.url);
+    }
+  } catch {}
+
+  return new OrigRequest(input, options);
+};
+
+window.Request.prototype = OrigRequest.prototype;
+
+const origRedirect = Response.redirect;
+Response.redirect = function(url, status) {
+  try {
+    url = proxify(url);
+  } catch {}
+  return origRedirect.call(this, url, status);
+};
+
+const OrigURL = window.URL;
+
+window.URL = function(url, base) {
+  try {
+    if (base) {
+      base = BASE;
+    }
+    const u = new OrigURL(url, base);
+    return u;
+  } catch {
+    return new OrigURL(url, base);
+  }
+};
+
+window.URL.prototype = OrigURL.prototype;
 
   const origSubmit = HTMLFormElement.prototype.submit;
   HTMLFormElement.prototype.submit = function() {
@@ -743,6 +819,12 @@ try {
     window.addEventListener("load", startDomRewriting, { once: true });
   }
 
+function doPing() {
+  fetch("/ping", { method: "POST", credentials: "same-origin" }).catch(() => {});
+}
+doPing();
+setInterval(doPing, 30_000);
+
 })();
 </script>`;
 }
@@ -762,7 +844,7 @@ async function decompress(buffer, encoding) {
 app.all(PREFIX, async (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).send("missing url");
-  trackUser(req);
+  trackUser(req, res);
 
   const origin = req.query.origin || target;
 
@@ -803,7 +885,7 @@ app.all(PREFIX, async (req, res) => {
     headers["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
     headers["accept-language"] = "en-US,en;q=0.9";
-    headers["accept-encoding"] = "gzip, br, deflate";
+    headers["accept-encoding"] = "identity"; // gzip, br, deflate
     headers["connection"] = "keep-alive";
     headers["upgrade-insecure-requests"] = "1";
     headers["cache-control"] = "no-cache";
@@ -812,6 +894,16 @@ app.all(PREFIX, async (req, res) => {
     headers["sec-fetch-dest"] = req.headers["sec-fetch-dest"] || "document";
     headers["sec-fetch-mode"] = req.headers["sec-fetch-mode"] || "navigate";
     headers["sec-fetch-site"] = "same-origin";
+
+    const isFetch =
+  req.headers["sec-fetch-mode"] === "cors" ||
+  req.headers["x-requested-with"] === "XMLHttpRequest";
+
+if (isFetch) {
+  headers["accept"] = "*/*";
+  headers["sec-fetch-dest"] = "empty";
+  headers["sec-fetch-mode"] = "cors";
+}
 
     const incomingCookie = req.headers["cookie"] || "";
     headers["cookie"] = incomingCookie
@@ -839,7 +931,7 @@ app.all(PREFIX, async (req, res) => {
       }
     }
 
-    const cacheKey = req.method === "GET" ? target : null;
+    const cacheKey = (req.method === "GET" && !req.headers.range) ? target : null;
     if (cacheKey) {
       const hit = cacheGet(cacheKey);
       if (hit) {
@@ -925,8 +1017,28 @@ for (const c of cookieList) {
     });
 
     res.setHeader("Accept-Ranges", "bytes");
+    const upstreamCL = response.headers.get("content-length");
+    if (upstreamCL) res.setHeader("Content-Length", upstreamCL);
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Credentials", "true");
+
+    if (req.headers.accept === "text/event-stream") {
+  res.setHeader("content-type", "text/event-stream");
+  try {
+    await pipeline(response.body, res);
+  } catch {}
+  return;
+}
+
+if (contentType.includes("application/json")) {
+  const rawBuf = await response.buffer();
+  const decompressed = contentEncoding
+    ? await decompress(rawBuf, contentEncoding)
+    : rawBuf;
+
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  return res.end(decompressed);
+}
 
     if (contentType.includes("text/html")) {
       const rawBuf = await response.buffer();
@@ -988,37 +1100,43 @@ for (const c of cookieList) {
       return res.end(outBuf);
     }
 
-    if (response.body) {
-      const isImage = contentType.startsWith("image/");
-      const isFont = contentType.includes("font") || contentType.includes("woff");
+if (response.body) {
+  const isMedia = contentType.startsWith("video/") || contentType.startsWith("audio/");
+  const isImage = contentType.startsWith("image/");
+  const isFont  = contentType.includes("font") || contentType.includes("woff");
 
-      if ((isImage || isFont) && cacheKey) {
-        const rawBuf = await response.buffer();
-        if (rawBuf.length < 2 * 1024 * 1024) {
-          const decompressed = contentEncoding ? await decompress(rawBuf, contentEncoding) : rawBuf;
-          res.setHeader("cache-control", "public, max-age=300");
-          cacheSet(cacheKey, {
-            status: response.status,
-            headers: { ...forwardedHeaders, "cache-control": "public, max-age=300" },
-            body: decompressed
-          });
-          return res.end(decompressed);
-        }
-        res.setHeader("cache-control", "public, max-age=300");
-        const stream = Readable.from(rawBuf);
-        try { await pipeline(stream, res); } catch {}
-        return;
-      }
-
-      try {
-        await pipeline(response.body, res);
-      } catch (pipeErr) {
-        if (!res.headersSent) res.status(500).end();
-      }
-      return;
+  if (isMedia) {
+    if (response.status === 206) {
+      const cr = response.headers.get("content-range");
+      const cl = response.headers.get("content-length");
+      if (cr) res.setHeader("Content-Range", cr);
+      if (cl) res.setHeader("Content-Length", cl);
+      res.status(206);
     }
+    res.setHeader("Accept-Ranges", "bytes");
+    try { await pipeline(response.body, res); } catch {}
+    return;
+  }
 
-    res.end();
+  if ((isImage || isFont) && cacheKey) {
+    const rawBuf = await response.buffer();
+    if (rawBuf.length < 2 * 1024 * 1024) {
+      const decompressed = contentEncoding ? await decompress(rawBuf, contentEncoding) : rawBuf;
+      res.setHeader("cache-control", "public, max-age=300");
+      cacheSet(cacheKey, {
+        status: response.status,
+        headers: { ...forwardedHeaders, "cache-control": "public, max-age=300" },
+        body: decompressed
+      });
+      return res.end(decompressed);
+    }
+  }
+
+  try { await pipeline(response.body, res); } catch {}
+  return;
+}
+
+res.end();
 
   } catch (e) {
     if (!res.headersSent) {
