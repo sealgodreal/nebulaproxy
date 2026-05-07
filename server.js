@@ -789,7 +789,6 @@ async function decompress(buffer, encoding) {
 app.all(PREFIX, async (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).send("missing url");
-  trackUser(req, res);
 
   const origin = req.query.origin || target;
 
