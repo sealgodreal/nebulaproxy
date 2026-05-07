@@ -38,49 +38,6 @@ const CACHEABLE_CT = [
   "application/x-font",
   "application/woff",
 ];
-const activeUsers = new Map();
-const USER_TIMEOUT_MS = 5 * 60 * 1000;
-const { randomUUID } = require("crypto");
-
-function trackUser(req, res) {
-  const cookies = parseCookies(req);
-  let id = cookies.uid;
-
-  if (!id) {
-    id = randomUUID();
-    res.setHeader("Set-Cookie", `uid=${id}; Path=/; HttpOnly; Max-Age=604800`);
-  }
-
-  activeUsers.set(id, Date.now());
-}
-
-function parseCookies(req) {
-  const header = req.headers.cookie || "";
-  const cookies = {};
-
-  header.split(";").forEach(cookie => {
-    const parts = cookie.split("=");
-    if (parts.length >= 2) {
-      const key = parts.shift().trim();
-      const value = parts.join("=").trim();
-      cookies[key] = decodeURIComponent(value);
-    }
-  });
-
-  return cookies;
-}
-
-setInterval(() => {
-    const now = Date.now();
-    for (const [ip, ts] of activeUsers) {
-        if (now - ts > USER_TIMEOUT_MS) activeUsers.delete(ip);
-    }
-}, 30_000);
-
-app.post("/ping", (req, res) => {
-  trackUser(req, res);
-  res.sendStatus(200);
-});
 
 app.get("/onlinetutors", (req, res) => {
     trackUser(req, res);
@@ -818,13 +775,6 @@ try {
   } else {
     window.addEventListener("load", startDomRewriting, { once: true });
   }
-
-function doPing() {
-  fetch("/ping", { method: "POST", credentials: "same-origin" }).catch(() => {});
-}
-doPing();
-setInterval(doPing, 30_000);
-
 })();
 </script>`;
 }
