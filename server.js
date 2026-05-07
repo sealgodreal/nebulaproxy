@@ -39,11 +39,6 @@ const CACHEABLE_CT = [
   "application/woff",
 ];
 
-app.get("/onlinetutors", (req, res) => {
-    trackUser(req, res);
-    res.json({ count: activeUsers.size });
-});
-
 function isCacheable(contentType, method) {
   if (method !== "GET") return false;
   return CACHEABLE_CT.some(t => contentType.includes(t));
