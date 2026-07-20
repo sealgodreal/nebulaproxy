@@ -3,6 +3,18 @@ const { URL } = require("url");
 const zlib = require("zlib");
 const WebSocket = require("ws");
 const app = express();
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "*");
+  res.header("Access-Control-Expose-Headers", "*");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
 const PORT = process.env.PORT || 8080;
 const PROXY_PREFIX = "/p/";
 const URL_ATTRS_BY_TAG = {
@@ -616,6 +628,10 @@ app.all(
           res.setHeader(key, value);
         }
       });
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "*");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+      res.setHeader("Access-Control-Expose-Headers", "*");
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
       res.setHeader("Pragma", "no-cache");
 
