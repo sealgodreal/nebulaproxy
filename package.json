@@ -1,7 +1,7 @@
 {
-  "name": "rewriting-proxy",
+  "name": "nebula proxy",
   "version": "1.0.0",
-  "description": "Generic rewriting web proxy: fetches a target page and rewrites all asset/link URLs to route back through the proxy.",
+  "description": "simple web proxy.",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
