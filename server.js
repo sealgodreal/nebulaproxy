@@ -894,6 +894,105 @@ function buildClientShim(baseUrl) {
       }
     }
   }, true);
+
+  var CURRENT_URL = BASE_URL;
+
+  function reportUrlToParent() {
+    try {
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: "nebula-url-update", url: CURRENT_URL }, "*");
+      }
+    } catch (e) {}
+  }
+
+  function updateCurrentUrl(url) {
+    if (typeof url === "string") {
+      try {
+        var parsed = new URL(url, CURRENT_URL);
+        CURRENT_URL = parsed.toString();
+        reportUrlToParent();
+      } catch (e) {}
+    }
+  }
+
+  if (document.readyState === "complete" || document.readyState === "interactive") {
+    reportUrlToParent();
+  } else {
+    document.addEventListener("DOMContentLoaded", reportUrlToParent);
+  }
+
+  window.addEventListener("hashchange", function() {
+    try {
+      CURRENT_URL = window.location.href;
+      var clean = CURRENT_URL;
+      if (clean.indexOf(PROXY_ORIGIN + PROXY_PREFIX) === 0) {
+        clean = decodeURIComponent(clean.slice((PROXY_ORIGIN + PROXY_PREFIX).length));
+      } else if (clean.indexOf(PROXY_PREFIX) === 0) {
+        clean = decodeURIComponent(clean.slice(PROXY_PREFIX.length));
+      }
+      CURRENT_URL = clean;
+      reportUrlToParent();
+    } catch (e) {}
+  });
+
+  window.addEventListener("popstate", function() {
+    try {
+      CURRENT_URL = window.location.href;
+      var clean = CURRENT_URL;
+      if (clean.indexOf(PROXY_ORIGIN + PROXY_PREFIX) === 0) {
+        clean = decodeURIComponent(clean.slice((PROXY_ORIGIN + PROXY_PREFIX).length));
+      } else if (clean.indexOf(PROXY_PREFIX) === 0) {
+        clean = decodeURIComponent(clean.slice(PROXY_PREFIX.length));
+      }
+      CURRENT_URL = clean;
+      reportUrlToParent();
+    } catch (e) {}
+  });
+
+  var origPushState2 = history.pushState;
+  history.pushState = function(state, title, url) {
+    var result = origPushState2.apply(this, arguments);
+    if (url) updateCurrentUrl(url);
+    return result;
+  };
+
+  var origReplaceState2 = history.replaceState;
+  history.replaceState = function(state, title, url) {
+    var result = origReplaceState2.apply(this, arguments);
+    if (url) updateCurrentUrl(url);
+    return result;
+  };
+
+  try {
+    var locProto4 = Object.getPrototypeOf(window.location);
+    var hrefDesc2 = Object.getOwnPropertyDescriptor(locProto4, "href");
+    if (hrefDesc2 && hrefDesc2.set) {
+      var origHrefSet = hrefDesc2.set;
+      Object.defineProperty(locProto4, "href", {
+        configurable: true,
+        enumerable: hrefDesc2.enumerable,
+        get: function() { return hrefDesc2.get.call(this); },
+        set: function(url) {
+          updateCurrentUrl(url);
+          return origHrefSet.call(this, url);
+        }
+      });
+    }
+  } catch (e) {}
+
+  ["assign", "replace"].forEach(function(fn) {
+    try {
+      var locProto5 = Object.getPrototypeOf(window.location);
+      var origFn2 = locProto5[fn];
+      if (typeof origFn2 === "function") {
+        locProto5[fn] = function(url) {
+          updateCurrentUrl(url);
+          return origFn2.call(this, url);
+        };
+      }
+    } catch (e) {}
+  });
+
 })();
 </script>`;
 }
