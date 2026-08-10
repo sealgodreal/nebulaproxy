@@ -896,11 +896,32 @@ function buildClientShim(baseUrl) {
   }, true);
 
   var CURRENT_URL = BASE_URL;
+  var lastReportedUrl = BASE_URL;
+  var urlPollInterval = null;
 
-  function reportUrlToParent() {
+  function decodeProxiedUrl(url) {
+    if (!url || typeof url !== "string") return url;
+    try {
+      var clean = url;
+      if (clean.indexOf(PROXY_ORIGIN + PROXY_PREFIX) === 0) {
+        clean = decodeURIComponent(clean.slice((PROXY_ORIGIN + PROXY_PREFIX).length));
+      } else if (clean.indexOf(PROXY_PREFIX) === 0) {
+        clean = decodeURIComponent(clean.slice(PROXY_PREFIX.length));
+      }
+      return clean;
+    } catch (e) {
+      return url;
+    }
+  }
+
+  function reportUrlToParent(force) {
     try {
       if (window.parent !== window) {
-        window.parent.postMessage({ type: "nebula-url-update", url: CURRENT_URL }, "*");
+        var urlToReport = decodeProxiedUrl(CURRENT_URL);
+        if (force || urlToReport !== lastReportedUrl) {
+          lastReportedUrl = urlToReport;
+          window.parent.postMessage({ type: "nebula-url-update", url: urlToReport }, "*");
+        }
       }
     } catch (e) {}
   }
@@ -910,56 +931,63 @@ function buildClientShim(baseUrl) {
       try {
         var parsed = new URL(url, CURRENT_URL);
         CURRENT_URL = parsed.toString();
-        reportUrlToParent();
+        reportUrlToParent(true);
       } catch (e) {}
     }
   }
 
+  function syncCurrentUrlFromLocation() {
+    try {
+      var raw = window.location.href;
+      var clean = decodeProxiedUrl(raw);
+      if (clean !== CURRENT_URL) {
+        CURRENT_URL = clean;
+        reportUrlToParent(true);
+      }
+    } catch (e) {}
+  }
+
+  function startUrlPolling() {
+    if (urlPollInterval) return;
+    urlPollInterval = setInterval(syncCurrentUrlFromLocation, 400);
+  }
+
+  function stopUrlPolling() {
+    if (urlPollInterval) {
+      clearInterval(urlPollInterval);
+      urlPollInterval = null;
+    }
+  }
+
   if (document.readyState === "complete" || document.readyState === "interactive") {
-    reportUrlToParent();
+    reportUrlToParent(true);
+    startUrlPolling();
   } else {
-    document.addEventListener("DOMContentLoaded", reportUrlToParent);
+    document.addEventListener("DOMContentLoaded", function() {
+      reportUrlToParent(true);
+      startUrlPolling();
+    });
   }
 
   window.addEventListener("hashchange", function() {
-    try {
-      CURRENT_URL = window.location.href;
-      var clean = CURRENT_URL;
-      if (clean.indexOf(PROXY_ORIGIN + PROXY_PREFIX) === 0) {
-        clean = decodeURIComponent(clean.slice((PROXY_ORIGIN + PROXY_PREFIX).length));
-      } else if (clean.indexOf(PROXY_PREFIX) === 0) {
-        clean = decodeURIComponent(clean.slice(PROXY_PREFIX.length));
-      }
-      CURRENT_URL = clean;
-      reportUrlToParent();
-    } catch (e) {}
+    syncCurrentUrlFromLocation();
   });
 
   window.addEventListener("popstate", function() {
-    try {
-      CURRENT_URL = window.location.href;
-      var clean = CURRENT_URL;
-      if (clean.indexOf(PROXY_ORIGIN + PROXY_PREFIX) === 0) {
-        clean = decodeURIComponent(clean.slice((PROXY_ORIGIN + PROXY_PREFIX).length));
-      } else if (clean.indexOf(PROXY_PREFIX) === 0) {
-        clean = decodeURIComponent(clean.slice(PROXY_PREFIX.length));
-      }
-      CURRENT_URL = clean;
-      reportUrlToParent();
-    } catch (e) {}
+    syncCurrentUrlFromLocation();
   });
 
   var origPushState2 = history.pushState;
   history.pushState = function(state, title, url) {
     var result = origPushState2.apply(this, arguments);
-    if (url) updateCurrentUrl(url);
+    setTimeout(syncCurrentUrlFromLocation, 0);
     return result;
   };
 
   var origReplaceState2 = history.replaceState;
   history.replaceState = function(state, title, url) {
     var result = origReplaceState2.apply(this, arguments);
-    if (url) updateCurrentUrl(url);
+    setTimeout(syncCurrentUrlFromLocation, 0);
     return result;
   };
 
@@ -973,8 +1001,9 @@ function buildClientShim(baseUrl) {
         enumerable: hrefDesc2.enumerable,
         get: function() { return hrefDesc2.get.call(this); },
         set: function(url) {
-          updateCurrentUrl(url);
-          return origHrefSet.call(this, url);
+          var result = origHrefSet.call(this, url);
+          setTimeout(syncCurrentUrlFromLocation, 0);
+          return result;
         }
       });
     }
@@ -986,12 +1015,25 @@ function buildClientShim(baseUrl) {
       var origFn2 = locProto5[fn];
       if (typeof origFn2 === "function") {
         locProto5[fn] = function(url) {
-          updateCurrentUrl(url);
-          return origFn2.call(this, url);
+          var result = origFn2.call(this, url);
+          setTimeout(syncCurrentUrlFromLocation, 0);
+          return result;
         };
       }
     } catch (e) {}
   });
+
+  var titleObserver = new MutationObserver(function() {
+    setTimeout(syncCurrentUrlFromLocation, 50);
+  });
+  if (document.querySelector("title")) {
+    titleObserver.observe(document.querySelector("title"), { childList: true, subtree: true });
+  } else {
+    document.addEventListener("DOMContentLoaded", function() {
+      var t = document.querySelector("title");
+      if (t) titleObserver.observe(t, { childList: true, subtree: true });
+    });
+  }
 
 })();
 </script>`;
